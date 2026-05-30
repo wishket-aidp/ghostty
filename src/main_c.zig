@@ -43,6 +43,9 @@ comptime {
     // Our benchmark API. We probably want to gate this on a build
     // config in the future but for now we always just export it.
     _ = @import("benchmark/main.zig").CApi;
+
+    // Phantom-specific C API (snapshot export, event callbacks, etc.).
+    _ = @import("lib_phantom.zig");
 }
 
 /// ghostty_info_s
