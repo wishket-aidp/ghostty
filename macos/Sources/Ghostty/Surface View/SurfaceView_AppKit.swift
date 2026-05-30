@@ -392,6 +392,14 @@ extension Ghostty {
             }
             self.surfaceModel = Ghostty.Surface(cSurface: surface)
 
+            // Phantom: announce surface creation so PhantomBridge.SurfaceObserver
+            // can register this surface for remote-control snapshots/input.
+            // Object is `self` so subscribers can pull `.surface` for the C handle.
+            NotificationCenter.default.post(
+                name: Ghostty.Notification.surfaceCreated,
+                object: self
+            )
+
             // Setup our tracking area so we get mouse moved events
             updateTrackingAreas()
 

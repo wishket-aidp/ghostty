@@ -447,6 +447,21 @@ extension Ghostty.Notification {
     /// Notifications related to key tables
     static let didChangeKeyTable = Notification.Name("com.mitchellh.ghostty.didChangeKeyTable")
     static let KeyTableKey = didChangeKeyTable.rawValue + ".action"
+
+    // MARK: Phantom additions — surface lifecycle observation.
+    //
+    // These two notifications let PhantomBridge subscribe to surface
+    // create/destroy events without importing the Ghostty Swift module.
+    // - `surfaceCreated` is posted by `SurfaceView.init` after a successful
+    //   `ghostty_surface_new` call. `object` is the SurfaceView; the C
+    //   `ghostty_surface_t` is reachable via `view.surface`.
+    // - `surfaceWillFree` is posted by `Ghostty.Surface.deinit` immediately
+    //   before the underlying `ghostty_surface_free` task is dispatched.
+    //   `userInfo["surfacePointer"]` holds an `NSValue` wrapping the raw
+    //   surface pointer (used because `object = nil` is required — the
+    //   wrapping `Surface` instance is already mid-deinit).
+    static let surfaceCreated = Notification.Name("ghostty.surfaceCreated")
+    static let surfaceWillFree = Notification.Name("ghostty.surfaceWillFree")
 }
 
 // Make the input enum hashable.

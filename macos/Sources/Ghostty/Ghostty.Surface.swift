@@ -1,3 +1,4 @@
+import Foundation
 import GhosttyKit
 
 extension Ghostty {
@@ -30,6 +31,17 @@ extension Ghostty {
             // We can't wait for the task to succeed so this will happen sometime
             // but that's okay.
             let surface = self.surface
+
+            // Phantom: announce that this surface is about to be freed so
+            // PhantomBridge.SurfaceObserver can unregister/cleanup BEFORE the
+            // C handle becomes invalid. Object is nil (self is mid-deinit);
+            // raw pointer is delivered via userInfo as an NSValue.
+            NotificationCenter.default.post(
+                name: Ghostty.Notification.surfaceWillFree,
+                object: nil,
+                userInfo: ["surfacePointer": NSValue(pointer: UnsafeRawPointer(surface))]
+            )
+
             Task.detached { @MainActor in
                 ghostty_surface_free(surface)
             }
