@@ -300,6 +300,10 @@ class AppDelegate: NSObject,
         // Setup signal handlers
         setupSignals()
 
+        // Phantom remote-control bootstrap. No-op if PhantomBridge isn't linked.
+        // See `macos/PhantomIntegration.md` and `AppDelegate+Phantom.swift`.
+        phantomBootstrap()
+
         switch Ghostty.launchSource {
         case .app:
             // Don't have to do anything.
@@ -416,6 +420,9 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+
+        // Tear down the Phantom coordinator if it was started.
+        phantomShutdown()
     }
 
     /// This is called when the application is already open and someone double-clicks the icon
