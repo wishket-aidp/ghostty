@@ -173,11 +173,21 @@ extension AppDelegate {
         // Replace the coordinator. We can't mutate `gatewayAdapter` on the
         // existing actor (it's `let`), so we stop the old one and start a
         // fresh coordinator with the same snapshot provider.
+        //
+        // Critically, we carry the OLD coordinator's `SessionRegistry` into
+        // the new one. SurfaceObserver only fires on the next
+        // `phantomSurfaceDidCreate` notification — surfaces already open
+        // when the user pairs would otherwise be invisible to the new
+        // coordinator's registry, and SnapshotPoller would iterate an
+        // empty session set forever. Reusing the registry preserves the
+        // surface ↔ SessionID mapping built up before pairing.
+        let existingRegistry = AppDelegate.phantomCoordinator?.registry
         Task { @MainActor in
             if let old = AppDelegate.phantomCoordinator {
                 await old.stop()
             }
             let coordinator = PhantomCoordinator(
+                registry: existingRegistry ?? SessionRegistry(),
                 snapshotProvider: { sessionID, surface in
                     SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
                 },
