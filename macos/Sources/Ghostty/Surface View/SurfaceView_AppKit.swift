@@ -394,10 +394,18 @@ extension Ghostty {
 
             // Phantom: announce surface creation so PhantomBridge.SurfaceObserver
             // can register this surface for remote-control snapshots/input.
-            // Object is `self` so subscribers can pull `.surface` for the C handle.
+            // The raw C handle rides in `userInfo["surfacePointer"]` because
+            // SurfaceObserver's KVC fallback (`value(forKey: "surface")`) does
+            // not see the Swift-only `surface` computed property — there's no
+            // `@objc` on it and `ghostty_surface_t` isn't Obj-C representable.
+            // Without the explicit pointer in userInfo every notification reaches
+            // SurfaceObserver but `extractPointer` returns nil and no surface is
+            // ever registered with the SessionRegistry.
+            let rawSurface = UnsafeMutableRawPointer(surface)
             NotificationCenter.default.post(
                 name: Ghostty.Notification.surfaceCreated,
-                object: self
+                object: self,
+                userInfo: ["surfacePointer": NSValue(pointer: rawSurface)]
             )
 
             // Setup our tracking area so we get mouse moved events
