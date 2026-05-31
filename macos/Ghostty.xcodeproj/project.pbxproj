@@ -768,7 +768,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.2.0;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1166,7 +1166,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.2.0;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac.debug;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1222,7 +1222,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.2.0;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1259,7 +1259,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1298,7 +1298,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -1337,7 +1337,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 0.1;
-				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free";
+				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = "com.mitchellh.ghostty-ios";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

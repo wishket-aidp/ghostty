@@ -50,6 +50,13 @@ extension AppDelegate {
     /// the lifetime matches the AppDelegate.
     fileprivate static var phantomPairedSink: AnyCancellable?
 
+    /// Combine subscription on `PairingWindowViewModel.$phase`. Watches for
+    /// `.paired` so we can auto-close the pair window — without this the
+    /// QR + green checkmark just sit on screen forever after a successful
+    /// handshake, which looks like the Mac is hung even though the iOS
+    /// peer is already receiving snapshots.
+    fileprivate static var phantomPairingPhaseSink: AnyCancellable?
+
     /// Called from `applicationDidFinishLaunching(_:)`.
     @MainActor
     func phantomBootstrap() {
@@ -316,6 +323,24 @@ extension AppDelegate {
 
         let wc = NSWindowController(window: window)
         AppDelegate.phantomPairingWindowController = wc
+
+        // Auto-close on successful pair. The view model publishes `.paired`
+        // as soon as `MacPairingService.pollStatus` sees the iOS side
+        // complete `/api/pair` and derives the shared key. Hold the
+        // success banner for ~1.2 s so the user sees the green checkmark,
+        // then close cleanly.
+        AppDelegate.phantomPairingPhaseSink = viewModel.$phase
+            .receive(on: DispatchQueue.main)
+            .sink { [weak window] phase in
+                guard case .paired = phase else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    window?.close()
+                    AppDelegate.phantomPairingWindowController = nil
+                    AppDelegate.phantomPairingService = nil
+                    AppDelegate.phantomPairingPhaseSink = nil
+                }
+            }
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
