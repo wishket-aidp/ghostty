@@ -168,6 +168,16 @@ class AppDelegate: NSObject,
     // MARK: - NSApplicationDelegate
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Phantom remote-control bootstrap. Must run BEFORE AppKit's
+        // window-restoration pass, which synchronously instantiates the
+        // restored `SurfaceView`s and posts `surfaceCreated` notifications.
+        // If we wait until `applicationDidFinishLaunching` those posts have
+        // already fired and `PhantomBridge.SurfaceObserver` (which is
+        // installed inside `PhantomCoordinator.init`) misses every one of
+        // them — the iOS peer then stays on the "Connected (no sessions
+        // yet)" empty state forever even though pairing is healthy.
+        phantomBootstrap()
+
         UserDefaults.standard.register(defaults: [
             // Disable the automatic full screen menu item because we handle
             // it manually.
@@ -300,9 +310,11 @@ class AppDelegate: NSObject,
         // Setup signal handlers
         setupSignals()
 
-        // Phantom remote-control bootstrap. No-op if PhantomBridge isn't linked.
-        // See `macos/PhantomIntegration.md` and `AppDelegate+Phantom.swift`.
-        phantomBootstrap()
+        // Phantom remote-control bootstrap now runs in
+        // `applicationWillFinishLaunching` so the SurfaceObserver is up
+        // before AppKit's window-restoration pass posts `surfaceCreated`.
+        // Leaving a no-op call here would re-initialize the coordinator and
+        // discard the registry, so we just rely on the earlier wiring.
 
         switch Ghostty.launchSource {
         case .app:
