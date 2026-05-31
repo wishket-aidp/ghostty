@@ -19,6 +19,7 @@ import AppKit
 import PhantomBridge
 import PhantomMacUI
 import SwiftUI
+import Combine
 
 extension AppDelegate {
     /// Process-wide Phantom coordinator. Initialised on
@@ -35,32 +36,177 @@ extension AppDelegate {
     /// open. Cleared when the window closes.
     fileprivate static var phantomPairingService: MacPairingService?
 
+    /// Process-wide paired-device store. The pairing service mutates this
+    /// on successful pair; the coordinator observes its `$current` and
+    /// brings up the gateway transport when a pairing lands.
+    @MainActor
+    fileprivate static var phantomPairedStore: PairedDeviceStore?
+
+    /// Currently-live WebSocket transport, if any. Kept here (not just in
+    /// the coordinator) so we can swap it cleanly on re-pairing.
+    fileprivate static var phantomGatewayTransport: URLSessionGatewayTransport?
+
+    /// Combine subscription on `phantomPairedStore.$current`. Stored so
+    /// the lifetime matches the AppDelegate.
+    fileprivate static var phantomPairedSink: AnyCancellable?
+
     /// Called from `applicationDidFinishLaunching(_:)`.
+    @MainActor
     func phantomBootstrap() {
         // PhantomConfigStore persists to ~/Library/Application Support/Phantom/.
         let store = PhantomConfigStore()
         _ = store.load() // Loaded for side effects (file creation) and future
                          // wiring through to relayURL / pushEnabled / etc.
 
-        let coordinator = PhantomCoordinator()
+        // Create the paired-device store. If a pairing already exists from
+        // a prior launch we'll wire the gateway immediately below.
+        let pairedStore = PairedDeviceStore()
+        AppDelegate.phantomPairedStore = pairedStore
+
+        // Build the snapshot provider. Captures a `phantom_snapshot_t*` for
+        // each polled surface and converts it into a renderer-grade
+        // `TerminalSnapshot`. Returns `nil` when the surface has no
+        // changes since the last poll (cheap noop), or when the phantom_*
+        // C symbols are not linked into the process (SPM unit tests).
+        let snapshotProvider: PhantomCoordinator.SnapshotProvider = { sessionID, surface in
+            return SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
+        }
+
+        // Build the gateway adapter only if we already have a pairing.
+        // Otherwise we defer until `phantomPairedSink` observes the first
+        // non-nil `current`.
+        let initialAdapter = AppDelegate.makePhantomGatewayAdapter(from: pairedStore)
+
+        let coordinator = PhantomCoordinator(
+            snapshotProvider: snapshotProvider,
+            gatewayAdapter: initialAdapter
+        )
         AppDelegate.phantomCoordinator = coordinator
 
-        Task {
+        Task { @MainActor in
             do {
                 try await coordinator.start()
-                AppDelegate.logger.info("PhantomCoordinator started")
+                AppDelegate.logger.info("PhantomCoordinator started (gateway=\(initialAdapter != nil ? "live" : "pending pairing"))")
+                if initialAdapter != nil {
+                    AppDelegate.phantomGatewayTransport?.connect()
+                }
             } catch {
                 AppDelegate.logger.error("PhantomCoordinator failed to start: \(error)")
             }
         }
+
+        // Observe pairing changes so the gateway comes up after the user
+        // completes a pair (no app restart needed). Idempotent: each new
+        // pairing tears down the prior transport before starting the new
+        // one.
+        AppDelegate.phantomPairedSink = pairedStore.$current
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] device in
+                guard let self else { return }
+                self.handlePhantomPairedDeviceChange(device: device, in: pairedStore)
+            }
 
         // Inject "Pair iPhone…" into the File menu. We do this in code so we
         // don't have to maintain a divergent MainMenu.xib against upstream.
         installPhantomPairMenuItem()
     }
 
+    // MARK: - Gateway wiring
+
+    /// Build a fully-wired `PhantomGatewayAdapter` from the current
+    /// `PairedDeviceStore` state, or `nil` if not yet paired. Also stashes
+    /// the underlying transport on the AppDelegate so it can be closed
+    /// cleanly later.
+    @MainActor
+    fileprivate static func makePhantomGatewayAdapter(from pairedStore: PairedDeviceStore) -> PhantomGatewayAdapter? {
+        guard let device = pairedStore.current,
+              let url = URL(string: device.relayURLString) else {
+            return nil
+        }
+
+        let transport = URLSessionGatewayTransport(
+            relayURL: url,
+            deviceID: device.deviceID,
+            jwtToken: device.jwtToken
+        )
+        AppDelegate.phantomGatewayTransport = transport
+
+        return PhantomGatewayAdapter(transport: transport, inputRouter: { event, sessionID in
+            // Route inbound input back into the live coordinator.
+            if let coord = AppDelegate.phantomCoordinator {
+                _ = await coord.inject(event, into: sessionID)
+            }
+        })
+    }
+
+    /// Called when `PairedDeviceStore.current` changes. If we now have a
+    /// pairing we (re)build the gateway adapter; if it just cleared we
+    /// tear the current one down.
+    @MainActor
+    private func handlePhantomPairedDeviceChange(device: PairedDevice?, in store: PairedDeviceStore) {
+        // If the value didn't actually change in a meaningful way (e.g.
+        // load() echoing the previous value at boot) and we already have
+        // a live transport, skip.
+        if device == nil {
+            // Pairing cleared. Disconnect existing transport, drop adapter.
+            AppDelegate.phantomGatewayTransport?.disconnect()
+            AppDelegate.phantomGatewayTransport = nil
+            return
+        }
+
+        // If we already have a transport for THIS device, leave it alone —
+        // the publisher fires once on boot with the persisted value, and
+        // `phantomBootstrap` may have already brought it up.
+        if let existing = AppDelegate.phantomGatewayTransport,
+           existing.deviceID == device?.deviceID {
+            return
+        }
+
+        // Otherwise, swap. Close the old transport (if any), construct a
+        // fresh adapter on the current pairing, and rebuild the
+        // coordinator with the new gateway.
+        AppDelegate.phantomGatewayTransport?.disconnect()
+        AppDelegate.phantomGatewayTransport = nil
+
+        guard let newAdapter = AppDelegate.makePhantomGatewayAdapter(from: store) else { return }
+
+        // Replace the coordinator. We can't mutate `gatewayAdapter` on the
+        // existing actor (it's `let`), so we stop the old one and start a
+        // fresh coordinator with the same snapshot provider.
+        Task { @MainActor in
+            if let old = AppDelegate.phantomCoordinator {
+                await old.stop()
+            }
+            let coordinator = PhantomCoordinator(
+                snapshotProvider: { sessionID, surface in
+                    SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
+                },
+                gatewayAdapter: newAdapter
+            )
+            AppDelegate.phantomCoordinator = coordinator
+            do {
+                try await coordinator.start()
+                AppDelegate.phantomGatewayTransport?.connect()
+                AppDelegate.logger.info("PhantomCoordinator restarted with live gateway after re-pairing")
+            } catch {
+                AppDelegate.logger.error("PhantomCoordinator restart failed: \(error)")
+            }
+        }
+    }
+
     /// Called from `applicationWillTerminate(_:)`.
+    @MainActor
     func phantomShutdown() {
+        // Tear down the Combine subscription first so we don't react to
+        // store changes during shutdown.
+        AppDelegate.phantomPairedSink?.cancel()
+        AppDelegate.phantomPairedSink = nil
+
+        // Close the WebSocket cleanly before stopping the coordinator so
+        // the iOS peer sees a graceful disconnect.
+        AppDelegate.phantomGatewayTransport?.disconnect()
+        AppDelegate.phantomGatewayTransport = nil
+
         guard let coordinator = AppDelegate.phantomCoordinator else { return }
         AppDelegate.phantomCoordinator = nil
 
@@ -132,9 +278,15 @@ extension AppDelegate {
         // Pick the relay URL.
         let relayURL = Self.phantomDefaultRelayHTTPURL()
 
-        // Build the pairing service + view model.
+        // Build the pairing service + view model. Pass in the process-wide
+        // `PairedDeviceStore` so a successful pair persists straight into
+        // it and `phantomPairedSink` picks it up to bring the gateway live.
         let code = PairingQRGenerator.randomPairingCode()
-        let service = MacPairingService(relayURL: relayURL, code: code)
+        let service = MacPairingService(
+            relayURL: relayURL,
+            code: code,
+            pairedStore: AppDelegate.phantomPairedStore
+        )
         AppDelegate.phantomPairingService = service
 
         let viewModel = PairingWindowViewModel(
