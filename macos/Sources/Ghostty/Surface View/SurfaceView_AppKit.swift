@@ -1059,9 +1059,11 @@ extension Ghostty {
             // keystroke arrived on this surface. If the phone currently owns
             // width for this session, the coordinator will restore the surface
             // to its pre-takeover pixel size and notify the phone.
+            // Use Foundation.Notification.Name to disambiguate from
+            // Ghostty.Notification (the enum defined in this module).
             let rawSurfaceForPhantom = UnsafeMutableRawPointer(surface)
             NotificationCenter.default.post(
-                name: Notification.Name("phantomLocalInput"),
+                name: Foundation.Notification.Name("phantomLocalInput"),
                 object: nil,
                 userInfo: ["surfacePointer": NSValue(pointer: rawSurfaceForPhantom)]
             )
