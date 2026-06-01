@@ -84,9 +84,21 @@ extension AppDelegate {
         // non-nil `current`.
         let initialAdapter = AppDelegate.makePhantomGatewayAdapter(from: pairedStore)
 
+        // Task 7 (auto-reclaim): read the surface's pixel size before a
+        // phone resize so the Mac can restore it when the user types.
+        // `ghostty_surface_size` returns a by-value struct (20-byte sret);
+        // we call it here — in AppDelegate which imports GhosttyKit — to
+        // avoid the @convention(c) sret ABI complexity in PhantomBridge.
+        let surfaceSizeProvider: PhantomCoordinator.SurfaceSizeProvider = { surface in
+            let s = ghostty_surface_size(surface)
+            guard s.width_px > 0 && s.height_px > 0 else { return nil }
+            return (s.width_px, s.height_px)
+        }
+
         let coordinator = PhantomCoordinator(
             snapshotProvider: snapshotProvider,
-            gatewayAdapter: initialAdapter
+            gatewayAdapter: initialAdapter,
+            surfaceSizeProvider: surfaceSizeProvider
         )
         AppDelegate.phantomCoordinator = coordinator
 
@@ -198,7 +210,12 @@ extension AppDelegate {
                 snapshotProvider: { sessionID, surface in
                     SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
                 },
-                gatewayAdapter: newAdapter
+                gatewayAdapter: newAdapter,
+                surfaceSizeProvider: { surface in
+                    let s = ghostty_surface_size(surface)
+                    guard s.width_px > 0 && s.height_px > 0 else { return nil }
+                    return (s.width_px, s.height_px)
+                }
             )
             AppDelegate.phantomCoordinator = coordinator
             do {

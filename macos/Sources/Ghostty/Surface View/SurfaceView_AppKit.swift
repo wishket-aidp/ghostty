@@ -1055,6 +1055,17 @@ extension Ghostty {
                 return
             }
 
+            // Phantom Task 7 (auto-reclaim): notify PhantomBridge that a local
+            // keystroke arrived on this surface. If the phone currently owns
+            // width for this session, the coordinator will restore the surface
+            // to its pre-takeover pixel size and notify the phone.
+            let rawSurfaceForPhantom = UnsafeMutableRawPointer(surface)
+            NotificationCenter.default.post(
+                name: Notification.Name("phantomLocalInput"),
+                object: nil,
+                userInfo: ["surfacePointer": NSValue(pointer: rawSurfaceForPhantom)]
+            )
+
             // On any keyDown event we unset our bell state
             bell = false
 
