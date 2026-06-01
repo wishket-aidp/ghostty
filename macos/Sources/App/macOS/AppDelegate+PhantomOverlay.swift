@@ -16,10 +16,10 @@
 //   • The pairing window uses NSHostingController in the same codebase, so the
 //     pattern is established.
 //
-// Multi-window caveat (v1): the overlay is applied to NSApp.mainWindow (or
-// keyWindow as fallback).  If multiple terminal windows are open, only the
-// main window gets the overlay.  Future work can iterate NSApp.windows and
-// cover every TerminalWindow, but v1 keeps it simple.
+// Multi-window: every titled terminal window is covered. We attach one
+// overlay per window on control-on, and also cover any window that becomes
+// key while control is active (newly-opened windows / window switching).
+// Panels (pairing/settings) are skipped via shouldCover().
 
 #if canImport(PhantomBridge) && canImport(PhantomMacUI)
 
@@ -64,24 +64,50 @@ extension AppDelegate {
 @MainActor
 final class PhantomOverlayManager: NSObject {
 
-    private var hostingView: NSView?
+    /// One overlay per covered window, keyed by the window's identity.
+    private var overlays: [ObjectIdentifier: NSView] = [:]
+    /// Whether the iPhone currently controls any session. Tracked so that a
+    /// window which becomes key *while controlled* (a newly-opened window, or
+    /// the user switching windows) also gets covered.
+    private var controlled = false
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowBecameKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
 
     @objc func handleControlChanged(_ note: Notification) {
-        let controlled = (note.userInfo?["controlled"] as? Bool) ?? false
+        controlled = (note.userInfo?["controlled"] as? Bool) ?? false
         if controlled {
-            showOverlay()
+            for window in NSApp.windows { attach(to: window) }
         } else {
-            hideOverlay()
+            hideAll()
         }
     }
 
-    func showOverlay() {
-        guard hostingView == nil else { return } // already showing
+    @objc private func windowBecameKey(_ note: Notification) {
+        guard controlled, let window = note.object as? NSWindow else { return }
+        attach(to: window)
+    }
 
-        // Target the main window first (most recently focused); fall back
-        // to the key window (e.g. when activated via an AppKit event).
-        guard let window = NSApp.mainWindow ?? NSApp.keyWindow,
-              let contentView = window.contentView else { return }
+    /// Cover terminal windows only — skip panels (pairing/settings/etc.) and
+    /// anything without a contentView.
+    private func shouldCover(_ window: NSWindow) -> Bool {
+        window.isVisible
+            && window.contentView != nil
+            && !(window is NSPanel)
+            && window.styleMask.contains(.titled)
+    }
+
+    private func attach(to window: NSWindow) {
+        guard shouldCover(window), let contentView = window.contentView else { return }
+        let key = ObjectIdentifier(window)
+        guard overlays[key] == nil else { return } // already covered
 
         let overlayView = PhantomRemoteControlOverlayView {
             Task { @MainActor in
@@ -93,7 +119,6 @@ final class PhantomOverlayManager: NSObject {
 
         let hosting = NSHostingView(rootView: overlayView)
         hosting.translatesAutoresizingMaskIntoConstraints = false
-
         contentView.addSubview(hosting)
         NSLayoutConstraint.activate([
             hosting.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -101,13 +126,12 @@ final class PhantomOverlayManager: NSObject {
             hosting.topAnchor.constraint(equalTo: contentView.topAnchor),
             hosting.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
-
-        hostingView = hosting
+        overlays[key] = hosting
     }
 
-    func hideOverlay() {
-        hostingView?.removeFromSuperview()
-        hostingView = nil
+    private func hideAll() {
+        for (_, view) in overlays { view.removeFromSuperview() }
+        overlays.removeAll()
     }
 }
 
