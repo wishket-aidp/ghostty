@@ -443,6 +443,31 @@ pub export fn phantom_surface_send_text(
     core.io.queueMessage(msg, .unlocked);
 }
 
+// Resizes the surface to an exact CELL grid (cols x rows).
+//
+// Converts the requested grid dimensions to pixels using the surface's
+// current cell metrics (`core_surface.size.cell`) and then calls
+// `surf.updateSize`, which is exactly what `ghostty_surface_set_size`
+// calls under the hood. Callers work in terminal coordinates; the
+// pixel conversion is transparent to them.
+//
+// MUST be called on the app's main thread (same constraint as every
+// other libghostty surface mutation).
+pub export fn phantom_surface_set_grid_size(
+    surface: ?*anyopaque,
+    cols: u16,
+    rows: u16,
+) callconv(.c) void {
+    const handle = surface orelse return;
+    if (cols == 0 or rows == 0) return;
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(handle));
+    const cell = surf.core_surface.size.cell;
+    if (cell.width == 0 or cell.height == 0) return;
+    const width_px: u32 = @as(u32, cols) * cell.width;
+    const height_px: u32 = @as(u32, rows) * cell.height;
+    surf.updateSize(width_px, height_px);
+}
+
 // Suppress unused-constant warnings when builds are aggressive about them.
 comptime {
     _ = PHANTOM_EVENT_BELL;

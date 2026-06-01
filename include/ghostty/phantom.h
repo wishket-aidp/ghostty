@@ -168,6 +168,12 @@ void phantom_surface_set_event_cb(
     void* userdata
 );
 
+// Resizes the surface to an exact CELL grid (cols x rows), converting to
+// pixels internally via the surface's current cell metrics. Unlike
+// ghostty_surface_set_size (pixels), this lets remote callers work in
+// terminal coordinates. MUST be called on the app's main thread.
+void phantom_surface_set_grid_size(ghostty_surface_t surface, uint16_t cols, uint16_t rows);
+
 #ifdef __cplusplus
 }
 #endif
