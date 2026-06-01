@@ -26,7 +26,10 @@ extension AppDelegate {
     /// Process-wide Phantom coordinator. Initialised on
     /// `applicationDidFinishLaunching`, torn down on
     /// `applicationWillTerminate`.
-    fileprivate static var phantomCoordinator: PhantomCoordinator?
+    ///
+    /// Declared `internal` (not `fileprivate`) so `AppDelegate+PhantomOverlay`
+    /// can call `reclaimAll()` from the same module without a separate accessor.
+    static var phantomCoordinator: PhantomCoordinator?
 
     /// Lazily created pairing window, owned by the AppDelegate so we can
     /// re-show the same instance across menu invocations rather than
@@ -117,6 +120,11 @@ extension AppDelegate {
                 AppDelegate.logger.error("PhantomCoordinator failed to start: \(error)")
             }
         }
+
+        // Install the remote-control overlay. Subscribes to
+        // `phantomRemoteControlChanged` and shows/hides the scrim over the
+        // key window when the iPhone takes/releases width ownership.
+        installPhantomOverlay()
 
         // Observe pairing changes so the gateway comes up after the user
         // completes a pair (no app restart needed). Idempotent: each new
