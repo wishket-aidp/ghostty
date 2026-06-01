@@ -35,6 +35,7 @@ const assert = std.debug.assert;
 
 const apprt = @import("apprt.zig");
 const terminal = @import("terminal/main.zig");
+const termio = @import("termio.zig");
 
 const EmbeddedSurface = apprt.embedded.Surface;
 const stylepkg = @import("terminal/style.zig");
@@ -412,6 +413,34 @@ pub export fn phantom_surface_set_event_cb(
         // Phase 1 doesn't fire callbacks anyway.
         return;
     };
+}
+
+// ---------------------------------------------------------------------------
+// Input — raw PTY write
+// ---------------------------------------------------------------------------
+
+// Write raw bytes straight to the surface's PTY, exactly as if they had been
+// produced by the local keyboard. Unlike `ghostty_surface_text` (which routes
+// through the clipboard-paste path and therefore wraps the bytes in bracketed
+// paste — so a trailing "\r" is inserted as literal newline content instead of
+// submitting the line), this delivers the bytes verbatim. PhantomBridge uses
+// it for the submit Enter after pasting a (possibly multi-line) message body
+// via `ghostty_surface_text`, so Claude Code et al. receive the multi-line
+// content as one bracketed paste and then a real Enter to send it.
+//
+// MUST be called on the app's main thread (same constraint as every other
+// libghostty surface mutation).
+pub export fn phantom_surface_send_text(
+    surface: ?*anyopaque,
+    ptr: [*]const u8,
+    len: usize,
+) callconv(.c) void {
+    const handle = surface orelse return;
+    if (len == 0) return;
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(handle));
+    const core = &surf.core_surface;
+    const msg = termio.Message.writeReq(core.alloc, ptr[0..len]) catch return;
+    core.io.queueMessage(msg, .unlocked);
 }
 
 // Suppress unused-constant warnings when builds are aggressive about them.

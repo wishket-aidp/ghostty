@@ -92,6 +92,13 @@ phantom_snapshot_t* phantom_surface_snapshot_if_changed(
 // Thread-safe: acquires the surface's renderer_state mutex.
 phantom_snapshot_t* phantom_surface_snapshot(ghostty_surface_t surface);
 
+// Writes raw bytes directly to the surface's PTY, verbatim — as if produced
+// by the local keyboard. Unlike ghostty_surface_text (clipboard-paste path,
+// which brackets the bytes so a trailing "\r" does not submit), these bytes
+// are delivered as-is. Use for the submit Enter after a bracketed-paste body.
+// MUST be called on the app's main thread.
+void phantom_surface_send_text(ghostty_surface_t surface, const char* ptr, size_t len);
+
 void phantom_snapshot_header(
     phantom_snapshot_t* snapshot,
     phantom_snapshot_header_t* out_header
