@@ -90,8 +90,11 @@ extension AppDelegate {
         // `ghostty_surface_size` returns a by-value struct (20-byte sret);
         // we call it here — in AppDelegate which imports GhosttyKit — to
         // avoid the @convention(c) sret ABI complexity in PhantomBridge.
+        // ghostty_surface_t is UnsafeMutableRawPointer; PhantomBridge uses
+        // OpaquePointer for surface handles to avoid importing GhosttyKit.
+        // Cast via UnsafeMutableRawPointer before calling ghostty_surface_size.
         let surfaceSizeProvider: PhantomCoordinator.SurfaceSizeProvider = { surface in
-            let s = ghostty_surface_size(surface)
+            let s = ghostty_surface_size(UnsafeMutableRawPointer(surface))
             guard s.width_px > 0 && s.height_px > 0 else { return nil }
             return (s.width_px, s.height_px)
         }
@@ -213,7 +216,7 @@ extension AppDelegate {
                 },
                 gatewayAdapter: newAdapter,
                 surfaceSizeProvider: { surface in
-                    let s = ghostty_surface_size(surface)
+                    let s = ghostty_surface_size(UnsafeMutableRawPointer(surface))
                     guard s.width_px > 0 && s.height_px > 0 else { return nil }
                     return (s.width_px, s.height_px)
                 }
