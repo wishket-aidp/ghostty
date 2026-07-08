@@ -82,7 +82,13 @@ extension AppDelegate {
                          // wiring through to relayURL / pushEnabled / etc.
         let daemon = AppDelegate.makePhantomAgentDaemon(store: store)
         AppDelegate.phantomAgentDaemon = daemon
-        AppDelegate.phantomProjectOrchestrator = ProjectOrchestratorRuntime(daemon: daemon)
+        AppDelegate.phantomProjectOrchestrator = ProjectOrchestratorRuntime(
+            daemon: daemon,
+            deliverySyncer: ProjectDeliverySyncRunner(
+                githubExecutor: ProcessGitHubCommandExecutor(),
+                httpClient: URLSessionExternalServiceHTTPClient()
+            )
+        )
 
         // Create the paired-device store. If a pairing already exists from
         // a prior launch we'll wire the gateway immediately below.
