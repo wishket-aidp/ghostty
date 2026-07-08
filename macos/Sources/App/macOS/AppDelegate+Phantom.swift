@@ -181,6 +181,7 @@ extension AppDelegate {
             database: database,
             managedLifecycle: lifecycle,
             commandExecutor: ProcessCommandExecutor(),
+            browserAutomationExecutor: ProcessBrowserAutomationExecutor(),
             broadcaster: PhantomGatewayBoardBroadcaster()
         )
     }
