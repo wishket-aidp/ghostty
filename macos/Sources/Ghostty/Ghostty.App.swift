@@ -1678,6 +1678,14 @@ extension Ghostty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 guard let pwd = String(cString: v.pwd!, encoding: .utf8) else { return }
                 surfaceView.pwd = pwd
+                NotificationCenter.default.post(
+                    name: Foundation.Notification.Name("phantomOSC7PwdDidChange"),
+                    object: nil,
+                    userInfo: [
+                        "surfacePointer": NSValue(pointer: UnsafeRawPointer(surface)),
+                        "pwd": pwd
+                    ]
+                )
 
             default:
                 assertionFailure()
