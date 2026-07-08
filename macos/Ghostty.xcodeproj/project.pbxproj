@@ -16,6 +16,7 @@
 		A51BFC272B30F1B800E92F16 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A51BFC262B30F1B800E92F16 /* Sparkle */; };
 		F0E0F0E0F0E0F0E0F0E0001A /* PhantomBridge in Frameworks */ = {isa = PBXBuildFile; productRef = F0E0F0E0F0E0F0E0F0E0001B /* PhantomBridge */; };
 		F0E0F0E0F0E0F0E0F0E0001C /* PhantomMacUI in Frameworks */ = {isa = PBXBuildFile; productRef = F0E0F0E0F0E0F0E0F0E0001D /* PhantomMacUI */; };
+		F0E0F0E0F0E0F0E0F0E0001F /* PhantomAgent in Frameworks */ = {isa = PBXBuildFile; productRef = F0E0F0E0F0E0F0E0F0E00020 /* PhantomAgent */; };
 		A53D0C8E2B53B0EA00305CE6 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */; };
 		A53D0C952B53B4D800305CE6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A5B30538299BEAAB0047F10C /* Assets.xcassets */; };
 		A546F1142D7B68D7003B11A0 /* locale in Resources */ = {isa = PBXBuildFile; fileRef = A546F1132D7B68D7003B11A0 /* locale */; };
@@ -291,6 +292,7 @@
 				A571AB1D2A206FCF00248498 /* GhosttyKit.xcframework in Frameworks */,
 				F0E0F0E0F0E0F0E0F0E0001A /* PhantomBridge in Frameworks */,
 				F0E0F0E0F0E0F0E0F0E0001C /* PhantomMacUI in Frameworks */,
+				F0E0F0E0F0E0F0E0F0E0001F /* PhantomAgent in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -452,6 +454,7 @@
 				A51BFC262B30F1B800E92F16 /* Sparkle */,
 				F0E0F0E0F0E0F0E0F0E0001B /* PhantomBridge */,
 				F0E0F0E0F0E0F0E0F0E0001D /* PhantomMacUI */,
+				F0E0F0E0F0E0F0E0F0E00020 /* PhantomAgent */,
 			);
 			productName = Ghostty;
 			productReference = A5B30531299BEAAA0047F10C /* Ghostty.app */;
@@ -1439,6 +1442,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F0E0F0E0F0E0F0E0F0E0001E /* XCLocalSwiftPackageReference "../../.." */;
 			productName = PhantomMacUI;
+		};
+		F0E0F0E0F0E0F0E0F0E00020 /* PhantomAgent */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0E0F0E0F0E0F0E0F0E0001E /* XCLocalSwiftPackageReference "../../.." */;
+			productName = PhantomAgent;
 		};
 /* End XCSwiftPackageProductDependency section */
 

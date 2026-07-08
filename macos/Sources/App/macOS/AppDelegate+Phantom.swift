@@ -15,12 +15,22 @@ import GhosttyKit
 // once the package is linked (see `macos/PhantomIntegration.md`),
 // the bootstrap activates automatically.
 
-#if canImport(PhantomBridge) && canImport(PhantomMacUI)
+#if canImport(PhantomBridge) && canImport(PhantomMacUI) && canImport(PhantomAgent)
 
+import PhantomAgent
 import PhantomBridge
+import PhantomCore
 import PhantomMacUI
 import SwiftUI
 import Combine
+
+fileprivate struct PhantomGatewayBoardBroadcaster: AgentBoardBroadcasting {
+    func publish(_ message: SyncMessage) async {
+        if let coordinator = AppDelegate.phantomCoordinator {
+            await coordinator.sendBoard(message)
+        }
+    }
+}
 
 extension AppDelegate {
     /// Process-wide Phantom coordinator. Initialised on
@@ -30,6 +40,8 @@ extension AppDelegate {
     /// Declared `internal` (not `fileprivate`) so `AppDelegate+PhantomOverlay`
     /// can call `reclaimAll()` from the same module without a separate accessor.
     static var phantomCoordinator: PhantomCoordinator?
+    static var phantomAgentDaemon: PhantomAgentDaemon<ProcessCommandExecutor>?
+    static var phantomProjectOrchestrator: ProjectOrchestratorRuntime<ProcessCommandExecutor>?
 
     /// Lazily created pairing window, owned by the AppDelegate so we can
     /// re-show the same instance across menu invocations rather than
@@ -68,6 +80,9 @@ extension AppDelegate {
         let store = PhantomConfigStore()
         _ = store.load() // Loaded for side effects (file creation) and future
                          // wiring through to relayURL / pushEnabled / etc.
+        let daemon = AppDelegate.makePhantomAgentDaemon(store: store)
+        AppDelegate.phantomAgentDaemon = daemon
+        AppDelegate.phantomProjectOrchestrator = ProjectOrchestratorRuntime(daemon: daemon)
 
         // Create the paired-device store. If a pairing already exists from
         // a prior launch we'll wire the gateway immediately below.
@@ -105,13 +120,18 @@ extension AppDelegate {
         let coordinator = PhantomCoordinator(
             snapshotProvider: snapshotProvider,
             gatewayAdapter: initialAdapter,
-            surfaceSizeProvider: surfaceSizeProvider
+            surfaceSizeProvider: surfaceSizeProvider,
+            observedSessionHandler: { event in
+                await AppDelegate.phantomObservedSessionHandler(event)
+            }
         )
         AppDelegate.phantomCoordinator = coordinator
 
         Task { @MainActor in
             do {
                 try await coordinator.start()
+                _ = try await daemon.bootstrap()
+                await AppDelegate.phantomProjectOrchestrator?.start()
                 AppDelegate.logger.info("PhantomCoordinator started (gateway=\(initialAdapter != nil ? "live" : "pending pairing"))")
                 if initialAdapter != nil {
                     AppDelegate.phantomGatewayTransport?.connect()
@@ -144,6 +164,36 @@ extension AppDelegate {
 
     // MARK: - Gateway wiring
 
+    @MainActor
+    fileprivate static func makePhantomAgentDaemon(store: PhantomConfigStore) -> PhantomAgentDaemon<ProcessCommandExecutor> {
+        let supportDirectory = store.fileURL.deletingLastPathComponent()
+        let database = LocalPhantomDatabase(
+            projectName: "Phantom",
+            fileURL: supportDirectory.appendingPathComponent("agent-board.json", isDirectory: false)
+        )
+        let lifecycle = ManagedTaskLifecycle(
+            executor: ProcessManagedTaskCommandExecutor(),
+            launcher: ProcessManagedAgentLauncher(
+                logDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
+            )
+        )
+        return PhantomAgentDaemon(
+            database: database,
+            managedLifecycle: lifecycle,
+            commandExecutor: ProcessCommandExecutor(),
+            broadcaster: PhantomGatewayBoardBroadcaster()
+        )
+    }
+
+    fileprivate static func phantomObservedSessionHandler(_ event: ObservedSessionEvent) async {
+        guard let daemon = AppDelegate.phantomAgentDaemon else { return }
+        _ = try? await daemon.ingestObservedSession(
+            sessionID: event.sessionID,
+            metadata: event.metadata,
+            status: event.status
+        )
+    }
+
     /// Build a fully-wired `PhantomGatewayAdapter` from the current
     /// `PairedDeviceStore` state, or `nil` if not yet paired. Also stashes
     /// the underlying transport on the AppDelegate so it can be closed
@@ -162,12 +212,19 @@ extension AppDelegate {
         )
         AppDelegate.phantomGatewayTransport = transport
 
-        return PhantomGatewayAdapter(transport: transport, inputRouter: { event, sessionID in
-            // Route inbound input back into the live coordinator.
-            if let coord = AppDelegate.phantomCoordinator {
-                _ = await coord.inject(event, into: sessionID)
+        return PhantomGatewayAdapter(
+            transport: transport,
+            inputRouter: { event, sessionID in
+                // Route inbound input back into the live coordinator.
+                if let coord = AppDelegate.phantomCoordinator {
+                    _ = await coord.inject(event, into: sessionID)
+                }
+            },
+            boardMessageRouter: { message in
+                guard let daemon = AppDelegate.phantomAgentDaemon else { return }
+                _ = try? await daemon.handle(message)
             }
-        })
+        )
     }
 
     /// Called when `PairedDeviceStore.current` changes. If we now have a
@@ -227,6 +284,9 @@ extension AppDelegate {
                     let s = ghostty_surface_size(UnsafeMutableRawPointer(surface))
                     guard s.width_px > 0 && s.height_px > 0 else { return nil }
                     return (s.width_px, s.height_px)
+                },
+                observedSessionHandler: { event in
+                    await AppDelegate.phantomObservedSessionHandler(event)
                 }
             )
             AppDelegate.phantomCoordinator = coordinator
@@ -252,14 +312,21 @@ extension AppDelegate {
         // the iOS peer sees a graceful disconnect.
         AppDelegate.phantomGatewayTransport?.disconnect()
         AppDelegate.phantomGatewayTransport = nil
+        let runtime = AppDelegate.phantomProjectOrchestrator
+        AppDelegate.phantomProjectOrchestrator = nil
+        AppDelegate.phantomAgentDaemon = nil
 
-        guard let coordinator = AppDelegate.phantomCoordinator else { return }
+        guard let coordinator = AppDelegate.phantomCoordinator else {
+            Task { await runtime?.stop() }
+            return
+        }
         AppDelegate.phantomCoordinator = nil
 
         // Block briefly so the gateway gets a clean close. Same pattern as
         // updateController's shutdown in upstream AppDelegate.
         let sem = DispatchSemaphore(value: 0)
         Task {
+            await runtime?.stop()
             await coordinator.stop()
             sem.signal()
         }
