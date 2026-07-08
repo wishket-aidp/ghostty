@@ -25,10 +25,13 @@ import SwiftUI
 import Combine
 
 fileprivate struct PhantomGatewayBoardBroadcaster: AgentBoardBroadcasting {
+    var pushNotifier: BoardEventPushNotifier?
+
     func publish(_ message: SyncMessage) async {
         if let coordinator = AppDelegate.phantomCoordinator {
             await coordinator.sendBoard(message)
         }
+        await pushNotifier?.publish(message)
     }
 }
 
@@ -42,6 +45,8 @@ extension AppDelegate {
     static var phantomCoordinator: PhantomCoordinator?
     static var phantomAgentDaemon: PhantomAgentDaemon<ProcessCommandExecutor>?
     static var phantomProjectOrchestrator: ProjectOrchestratorRuntime<ProcessCommandExecutor>?
+    static var phantomDeviceTokenStore: DeviceTokenStore?
+    static var phantomBoardPushNotifier: BoardEventPushNotifier?
 
     /// Lazily created pairing window, owned by the AppDelegate so we can
     /// re-show the same instance across menu invocations rather than
@@ -78,8 +83,13 @@ extension AppDelegate {
     func phantomBootstrap() {
         // PhantomConfigStore persists to ~/Library/Application Support/Phantom/.
         let store = PhantomConfigStore()
-        _ = store.load() // Loaded for side effects (file creation) and future
-                         // wiring through to relayURL / pushEnabled / etc.
+        let config = store.load()
+        let tokenStore = DeviceTokenStore()
+        AppDelegate.phantomDeviceTokenStore = tokenStore
+        AppDelegate.phantomBoardPushNotifier = AppDelegate.makePhantomBoardPushNotifier(
+            config: config,
+            tokenStore: tokenStore
+        )
         let daemon = AppDelegate.makePhantomAgentDaemon(store: store)
         AppDelegate.phantomAgentDaemon = daemon
         AppDelegate.phantomProjectOrchestrator = ProjectOrchestratorRuntime(
@@ -188,8 +198,44 @@ extension AppDelegate {
             managedLifecycle: lifecycle,
             commandExecutor: ProcessCommandExecutor(),
             browserAutomationExecutor: ProcessBrowserAutomationExecutor(),
-            broadcaster: PhantomGatewayBoardBroadcaster()
+            broadcaster: PhantomGatewayBoardBroadcaster(pushNotifier: AppDelegate.phantomBoardPushNotifier)
         )
+    }
+
+    @MainActor
+    fileprivate static func makePhantomBoardPushNotifier(
+        config: PhantomConfig,
+        tokenStore: DeviceTokenStore
+    ) -> BoardEventPushNotifier? {
+        guard config.pushEnabled else { return nil }
+        let env = ProcessInfo.processInfo.environment
+        guard let keyID = env["PHANTOM_APNS_KEY_ID"],
+              let teamID = env["PHANTOM_APNS_TEAM_ID"] else {
+            return nil
+        }
+        let privateKey: Data?
+        if let raw = env["PHANTOM_APNS_PRIVATE_KEY"] {
+            privateKey = raw.data(using: .utf8)
+        } else if let path = env["PHANTOM_APNS_PRIVATE_KEY_PATH"] {
+            privateKey = try? Data(contentsOf: URL(fileURLWithPath: path))
+        } else {
+            privateKey = nil
+        }
+        guard let privateKey else { return nil }
+        let topic = env["PHANTOM_APNS_TOPIC"] ?? "com.phantom.ios"
+        let useSandbox = env["PHANTOM_APNS_SANDBOX"].map { $0 != "0" && $0.lowercased() != "false" } ?? true
+        guard let delivery = try? APNSDelivery(
+            keyID: keyID,
+            teamID: teamID,
+            privateKey: privateKey,
+            topic: topic,
+            useSandbox: useSandbox
+        ) else {
+            return nil
+        }
+        return BoardEventPushNotifier(deliverer: delivery) {
+            tokenStore.allTokens().map(\.token)
+        }
     }
 
     fileprivate static func phantomObservedSessionHandler(_ event: ObservedSessionEvent) async {
@@ -228,6 +274,10 @@ extension AppDelegate {
                 }
             },
             boardMessageRouter: { message in
+                if case .pushDeviceToken(let token) = message {
+                    try? AppDelegate.phantomDeviceTokenStore?.store(token: token.token, for: token.deviceID)
+                    return
+                }
                 guard let daemon = AppDelegate.phantomAgentDaemon else { return }
                 _ = try? await daemon.handle(message)
             }
@@ -322,6 +372,8 @@ extension AppDelegate {
         let runtime = AppDelegate.phantomProjectOrchestrator
         AppDelegate.phantomProjectOrchestrator = nil
         AppDelegate.phantomAgentDaemon = nil
+        AppDelegate.phantomDeviceTokenStore = nil
+        AppDelegate.phantomBoardPushNotifier = nil
 
         guard let coordinator = AppDelegate.phantomCoordinator else {
             Task { await runtime?.stop() }
