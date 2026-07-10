@@ -35,6 +35,14 @@ fileprivate struct PhantomGatewayBoardBroadcaster: AgentBoardBroadcasting {
     }
 }
 
+fileprivate struct PhantomHostPushDeviceTokenRegistrar: PushDeviceTokenRegistering {
+    let tokenStore: DeviceTokenStore
+
+    func register(_ token: SyncMessage.PushDeviceToken) async throws {
+        try tokenStore.store(token: token.token, for: token.deviceID)
+    }
+}
+
 extension AppDelegate {
     /// Process-wide Phantom coordinator. Initialised on
     /// `applicationDidFinishLaunching`, torn down on
@@ -43,8 +51,7 @@ extension AppDelegate {
     /// Declared `internal` (not `fileprivate`) so `AppDelegate+PhantomOverlay`
     /// can call `reclaimAll()` from the same module without a separate accessor.
     static var phantomCoordinator: PhantomCoordinator?
-    static var phantomAgentDaemon: PhantomAgentDaemon<ProcessCommandExecutor>?
-    static var phantomProjectOrchestrator: ProjectOrchestratorRuntime<ProcessCommandExecutor>?
+    static var phantomAgentPortfolio: ProjectAgentPortfolio<ProcessCommandExecutor>?
     static var phantomDeviceTokenStore: DeviceTokenStore?
     static var phantomBoardPushNotifier: BoardEventPushNotifier?
 
@@ -90,15 +97,8 @@ extension AppDelegate {
             config: config,
             tokenStore: tokenStore
         )
-        let daemon = AppDelegate.makePhantomAgentDaemon(store: store)
-        AppDelegate.phantomAgentDaemon = daemon
-        AppDelegate.phantomProjectOrchestrator = ProjectOrchestratorRuntime(
-            daemon: daemon,
-            deliverySyncer: ProjectDeliverySyncRunner(
-                githubExecutor: ProcessGitHubCommandExecutor(),
-                httpClient: URLSessionExternalServiceHTTPClient()
-            )
-        )
+        let portfolio = AppDelegate.makePhantomAgentPortfolio(store: store, tokenStore: tokenStore)
+        AppDelegate.phantomAgentPortfolio = portfolio
 
         // Create the paired-device store. If a pairing already exists from
         // a prior launch we'll wire the gateway immediately below.
@@ -146,11 +146,11 @@ extension AppDelegate {
         Task { @MainActor in
             do {
                 try await coordinator.start()
-                _ = try await daemon.bootstrap()
-                await AppDelegate.phantomProjectOrchestrator?.start()
+                _ = try await portfolio.start()
                 AppDelegate.logger.info("PhantomCoordinator started (gateway=\(initialAdapter != nil ? "live" : "pending pairing"))")
                 if initialAdapter != nil {
                     AppDelegate.phantomGatewayTransport?.connect()
+                    _ = try? await portfolio.publishSnapshots()
                 }
             } catch {
                 AppDelegate.logger.error("PhantomCoordinator failed to start: \(error)")
@@ -181,24 +181,23 @@ extension AppDelegate {
     // MARK: - Gateway wiring
 
     @MainActor
-    fileprivate static func makePhantomAgentDaemon(store: PhantomConfigStore) -> PhantomAgentDaemon<ProcessCommandExecutor> {
+    fileprivate static func makePhantomAgentPortfolio(
+        store: PhantomConfigStore,
+        tokenStore: DeviceTokenStore
+    ) -> ProjectAgentPortfolio<ProcessCommandExecutor> {
         let supportDirectory = store.fileURL.deletingLastPathComponent()
-        let database = LocalPhantomDatabase(
-            projectName: "Phantom",
-            fileURL: supportDirectory.appendingPathComponent("agent-board.json", isDirectory: false)
-        )
-        let lifecycle = ManagedTaskLifecycle(
-            executor: ProcessManagedTaskCommandExecutor(),
-            launcher: ProcessManagedAgentLauncher(
-                logDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
-            )
-        )
-        return PhantomAgentDaemon(
-            database: database,
-            managedLifecycle: lifecycle,
-            commandExecutor: ProcessCommandExecutor(),
-            browserAutomationExecutor: ProcessBrowserAutomationExecutor(),
-            broadcaster: PhantomGatewayBoardBroadcaster(pushNotifier: AppDelegate.phantomBoardPushNotifier)
+        return ProjectAgentPortfolio.local(
+            registryURL: supportDirectory.appendingPathComponent("agent-projects.json", isDirectory: false),
+            databaseDirectory: supportDirectory.appendingPathComponent("agent-boards", isDirectory: true),
+            defaultProject: ProjectDescriptor(name: "Phantom"),
+            legacyDefaultDatabaseURL: supportDirectory.appendingPathComponent("agent-board.json", isDirectory: false),
+            deliverySyncer: ProjectDeliverySyncRunner(
+                githubExecutor: ProcessGitHubCommandExecutor(),
+                httpClient: URLSessionExternalServiceHTTPClient()
+            ),
+            broadcaster: PhantomGatewayBoardBroadcaster(pushNotifier: AppDelegate.phantomBoardPushNotifier),
+            pushRegistrar: PhantomHostPushDeviceTokenRegistrar(tokenStore: tokenStore),
+            agentLogDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
         )
     }
 
@@ -239,11 +238,13 @@ extension AppDelegate {
     }
 
     fileprivate static func phantomObservedSessionHandler(_ event: ObservedSessionEvent) async {
-        guard let daemon = AppDelegate.phantomAgentDaemon else { return }
-        _ = try? await daemon.ingestObservedSession(
+        guard let portfolio = AppDelegate.phantomAgentPortfolio else { return }
+        _ = try? await portfolio.ingestObservedSession(
             sessionID: event.sessionID,
             metadata: event.metadata,
-            status: event.status
+            status: event.status,
+            branchName: event.branchName,
+            baseBranchName: event.baseBranchName
         )
     }
 
@@ -274,12 +275,13 @@ extension AppDelegate {
                 }
             },
             boardMessageRouter: { message in
-                if case .pushDeviceToken(let token) = message {
-                    try? AppDelegate.phantomDeviceTokenStore?.store(token: token.token, for: token.deviceID)
+                guard let portfolio = AppDelegate.phantomAgentPortfolio else { return }
+                if case .manifestOperationRequest(let request) = message {
+                    let result = await portfolio.executeManifestOperation(request)
+                    await AppDelegate.phantomCoordinator?.sendBoard(.manifestOperationResult(result))
                     return
                 }
-                guard let daemon = AppDelegate.phantomAgentDaemon else { return }
-                _ = try? await daemon.handle(message)
+                _ = try? await portfolio.handle(message)
             }
         )
     }
@@ -350,6 +352,7 @@ extension AppDelegate {
             do {
                 try await coordinator.start()
                 AppDelegate.phantomGatewayTransport?.connect()
+                _ = try? await AppDelegate.phantomAgentPortfolio?.publishSnapshots()
                 AppDelegate.logger.info("PhantomCoordinator restarted with live gateway after re-pairing")
             } catch {
                 AppDelegate.logger.error("PhantomCoordinator restart failed: \(error)")
@@ -369,14 +372,13 @@ extension AppDelegate {
         // the iOS peer sees a graceful disconnect.
         AppDelegate.phantomGatewayTransport?.disconnect()
         AppDelegate.phantomGatewayTransport = nil
-        let runtime = AppDelegate.phantomProjectOrchestrator
-        AppDelegate.phantomProjectOrchestrator = nil
-        AppDelegate.phantomAgentDaemon = nil
+        let portfolio = AppDelegate.phantomAgentPortfolio
+        AppDelegate.phantomAgentPortfolio = nil
         AppDelegate.phantomDeviceTokenStore = nil
         AppDelegate.phantomBoardPushNotifier = nil
 
         guard let coordinator = AppDelegate.phantomCoordinator else {
-            Task { await runtime?.stop() }
+            Task { await portfolio?.stop() }
             return
         }
         AppDelegate.phantomCoordinator = nil
@@ -385,7 +387,7 @@ extension AppDelegate {
         // updateController's shutdown in upstream AppDelegate.
         let sem = DispatchSemaphore(value: 0)
         Task {
-            await runtime?.stop()
+            await portfolio?.stop()
             await coordinator.stop()
             sem.signal()
         }
