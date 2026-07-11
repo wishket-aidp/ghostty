@@ -52,6 +52,9 @@ extension AppDelegate {
     /// can call `reclaimAll()` from the same module without a separate accessor.
     static var phantomCoordinator: PhantomCoordinator?
     static var phantomAgentPortfolio: ProjectAgentPortfolio<ProcessCommandExecutor>?
+    static var phantomAgentRuntimeLease: ProjectAgentRuntimeLease?
+    static var phantomAgentRunsEmbedded = false
+    static var phantomBoardBridgeTask: Task<Void, Never>?
     static var phantomDeviceTokenStore: DeviceTokenStore?
     static var phantomBoardPushNotifier: BoardEventPushNotifier?
 
@@ -99,6 +102,20 @@ extension AppDelegate {
         )
         let portfolio = AppDelegate.makePhantomAgentPortfolio(store: store, tokenStore: tokenStore)
         AppDelegate.phantomAgentPortfolio = portfolio
+        let supportDirectory = store.fileURL.deletingLastPathComponent()
+        let servicePaths = PhantomAgentServicePaths(supportDirectory: supportDirectory)
+        do {
+            AppDelegate.phantomAgentRuntimeLease = try ProjectAgentRuntimeLease.acquire(
+                at: servicePaths.runtimeLeaseURL
+            )
+            AppDelegate.phantomAgentRunsEmbedded = AppDelegate.phantomAgentRuntimeLease != nil
+        } catch {
+            AppDelegate.phantomAgentRunsEmbedded = true
+            AppDelegate.logger.error("Phantom agent lease unavailable; using embedded runtime: \(error)")
+        }
+        AppDelegate.installBundledPhantomAgentDaemonIfNeeded(
+            supportDirectory: supportDirectory
+        )
 
         // Create the paired-device store. If a pairing already exists from
         // a prior launch we'll wire the gateway immediately below.
@@ -146,7 +163,16 @@ extension AppDelegate {
         Task { @MainActor in
             do {
                 try await coordinator.start()
-                _ = try await portfolio.start()
+                if AppDelegate.phantomAgentRunsEmbedded {
+                    _ = try await portfolio.start()
+                    AppDelegate.logger.info("Phantom agent runtime started in embedded mode")
+                } else {
+                    AppDelegate.startPhantomBoardBridge(
+                        portfolio: portfolio,
+                        leaseURL: servicePaths.runtimeLeaseURL
+                    )
+                    AppDelegate.logger.info("Phantom agent runtime delegated to phantom-agentd")
+                }
                 AppDelegate.logger.info("PhantomCoordinator started (gateway=\(initialAdapter != nil ? "live" : "pending pairing"))")
                 if initialAdapter != nil {
                     AppDelegate.phantomGatewayTransport?.connect()
@@ -176,6 +202,70 @@ extension AppDelegate {
         // Inject "Pair iPhone…" into the File menu. We do this in code so we
         // don't have to maintain a divergent MainMenu.xib against upstream.
         installPhantomPairMenuItem()
+    }
+
+    @MainActor
+    fileprivate static func startPhantomBoardBridge(
+        portfolio: ProjectAgentPortfolio<ProcessCommandExecutor>,
+        leaseURL: URL
+    ) {
+        phantomBoardBridgeTask?.cancel()
+        phantomBoardBridgeTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if let lease = try? ProjectAgentRuntimeLease.acquire(at: leaseURL) {
+                    phantomAgentRuntimeLease = lease
+                    phantomAgentRunsEmbedded = true
+                    do {
+                        _ = try await portfolio.start()
+                        AppDelegate.logger.info("Phantom agent runtime failed over to embedded mode")
+                        return
+                    } catch {
+                        phantomAgentRunsEmbedded = false
+                        phantomAgentRuntimeLease = nil
+                        lease.release()
+                        AppDelegate.logger.error("Phantom embedded runtime failover failed: \(error)")
+                    }
+                }
+                if phantomGatewayTransport != nil {
+                    _ = try? await portfolio.publishSnapshots()
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    @MainActor
+    fileprivate static func installBundledPhantomAgentDaemonIfNeeded(
+        supportDirectory: URL
+    ) {
+        let helperURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/phantom-agentd", isDirectory: false)
+        guard FileManager.default.isExecutableFile(atPath: helperURL.path) else { return }
+
+        let plistURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/LaunchAgents/\(PhantomAgentLaunchAgentConfiguration.defaultLabel).plist",
+                isDirectory: false
+            )
+        let helperDate = (try? helperURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+        let plistDate = (try? plistURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate
+        if let helperDate, let plistDate, helperDate <= plistDate { return }
+
+        let process = Process()
+        process.executableURL = helperURL
+        process.arguments = ["install"]
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "PHANTOM_SUPPORT_DIRECTORY": supportDirectory.path
+        ]) { _, new in new }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            AppDelegate.logger.error("Phantom agent LaunchAgent install failed: \(error)")
+        }
     }
 
     // MARK: - Gateway wiring
@@ -372,13 +462,22 @@ extension AppDelegate {
         // the iOS peer sees a graceful disconnect.
         AppDelegate.phantomGatewayTransport?.disconnect()
         AppDelegate.phantomGatewayTransport = nil
+        AppDelegate.phantomBoardBridgeTask?.cancel()
+        AppDelegate.phantomBoardBridgeTask = nil
         let portfolio = AppDelegate.phantomAgentPortfolio
+        let runtimeLease = AppDelegate.phantomAgentRuntimeLease
+        let runsEmbedded = AppDelegate.phantomAgentRunsEmbedded
         AppDelegate.phantomAgentPortfolio = nil
+        AppDelegate.phantomAgentRuntimeLease = nil
+        AppDelegate.phantomAgentRunsEmbedded = false
         AppDelegate.phantomDeviceTokenStore = nil
         AppDelegate.phantomBoardPushNotifier = nil
 
         guard let coordinator = AppDelegate.phantomCoordinator else {
-            Task { await portfolio?.stop() }
+            Task {
+                if runsEmbedded { await portfolio?.stop() }
+                runtimeLease?.release()
+            }
             return
         }
         AppDelegate.phantomCoordinator = nil
@@ -387,8 +486,9 @@ extension AppDelegate {
         // updateController's shutdown in upstream AppDelegate.
         let sem = DispatchSemaphore(value: 0)
         Task {
-            await portfolio?.stop()
+            if runsEmbedded { await portfolio?.stop() }
             await coordinator.stop()
+            runtimeLease?.release()
             sem.signal()
         }
         _ = sem.wait(timeout: .now() + 2.0)
