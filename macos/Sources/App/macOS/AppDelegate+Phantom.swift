@@ -440,6 +440,11 @@ extension AppDelegate {
                         AppDelegate.logger.error("Phantom embedded runtime failover failed: \(error)")
                     }
                 }
+                do {
+                    _ = try await portfolio.ensureOrchestratorAgentSessions()
+                } catch {
+                    AppDelegate.logger.error("Phantom orchestrator session keeper failed: \(error)")
+                }
                 if phantomGatewayTransport != nil {
                     _ = try? await portfolio.publishSnapshots()
                 }
