@@ -43,6 +43,213 @@ fileprivate struct PhantomHostPushDeviceTokenRegistrar: PushDeviceTokenRegisteri
     }
 }
 
+fileprivate enum PhantomGhosttyAgentLauncherError: Error {
+    case surfaceCreationFailed
+    case coordinatorUnavailable
+    case sessionRegistrationTimedOut
+    case promptDeliveryFailed
+}
+
+fileprivate final class PhantomCreatedSurfaceBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var surface: OpaquePointer?
+
+    func record(_ value: NSValue) {
+        guard let pointer = value.pointerValue else { return }
+        lock.lock()
+        if surface == nil {
+            surface = OpaquePointer(pointer)
+        }
+        lock.unlock()
+    }
+
+    func snapshot() -> OpaquePointer? {
+        lock.lock()
+        defer { lock.unlock() }
+        return surface
+    }
+}
+
+/// Runs managed Codex and Claude Code agents in real Ghostty tabs so every
+/// board task has a visible, attachable terminal session instead of only a PID.
+@MainActor
+fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, ManagedAgentMessaging {
+    private let ghostty: Ghostty.App
+    private let logDirectory: URL
+    private var launchInProgress = false
+    private var launchWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(ghostty: Ghostty.App, logDirectory: URL) {
+        self.ghostty = ghostty
+        self.logDirectory = logDirectory
+    }
+
+    func launch(_ request: ManagedAgentLaunchRequest) async throws -> ManagedAgentLaunchResult {
+        await acquireLaunchSlot()
+        defer { releaseLaunchSlot() }
+
+        guard let coordinator = AppDelegate.phantomCoordinator else {
+            throw PhantomGhosttyAgentLauncherError.coordinatorUnavailable
+        }
+
+        let launchID = UUID()
+        let logURL = logDirectory.appendingPathComponent("\(launchID.uuidString).log", isDirectory: false)
+        try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        let surface = try createSurface(for: request, logURL: logURL)
+        let sessionID = try await waitForSessionID(surface: surface, registry: coordinator.registry)
+        await coordinator.registry.updateMetadata(
+            AgentSessionMetadata(
+                deviceID: "local-mac",
+                deviceName: Host.current().localizedName ?? "Mac",
+                accountKind: request.agentKind,
+                accountLabel: request.agentDisplayName,
+                projectName: URL(fileURLWithPath: request.workingDirectory).lastPathComponent,
+                projectPath: request.workingDirectory,
+                title: request.displayName
+            ),
+            for: sessionID
+        )
+
+        return ManagedAgentLaunchResult(
+            session: AgentSessionRef(
+                sessionID: sessionID,
+                agentKind: request.agentKind,
+                label: request.agentDisplayName
+            ),
+            logPath: logURL.path
+        )
+    }
+
+    func isRunning(_ result: ManagedAgentLaunchResult) async -> Bool {
+        await runtimeStatus(for: result) == .running
+    }
+
+    func runtimeStatus(for result: ManagedAgentLaunchResult) async -> ManagedAgentRuntimeStatus {
+        guard let sessionID = result.session?.sessionID,
+              let coordinator = AppDelegate.phantomCoordinator else {
+            return .missing
+        }
+        return await coordinator.registry.allSessionIDs.contains(sessionID) ? .running : .completed
+    }
+
+    func runtimeStatuses(for results: [ManagedAgentLaunchResult]) async -> [ManagedAgentRuntimeStatus] {
+        guard let coordinator = AppDelegate.phantomCoordinator else {
+            return Array(repeating: .missing, count: results.count)
+        }
+        let activeSessionIDs = Set(await coordinator.registry.allSessionIDs)
+        return results.map { result in
+            guard let sessionID = result.session?.sessionID else { return .missing }
+            return activeSessionIDs.contains(sessionID) ? .running : .completed
+        }
+    }
+
+    func sendPrompt(_ prompt: String, to result: ManagedAgentLaunchResult) async throws {
+        guard let sessionID = result.session?.sessionID,
+              let coordinator = AppDelegate.phantomCoordinator else {
+            throw PhantomGhosttyAgentLauncherError.coordinatorUnavailable
+        }
+        let accepted = await coordinator.inject(.paste(prompt + "\r"), into: sessionID)
+        guard accepted > 0 else {
+            throw PhantomGhosttyAgentLauncherError.promptDeliveryFailed
+        }
+    }
+
+    private func createSurface(
+        for request: ManagedAgentLaunchRequest,
+        logURL: URL
+    ) throws -> OpaquePointer {
+        let createdSurface = PhantomCreatedSurfaceBox()
+        let center = NotificationCenter.default
+        let observer = center.addObserver(
+            forName: Ghostty.Notification.surfaceCreated,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let value = notification.userInfo?["surfacePointer"] as? NSValue else { return }
+            createdSurface.record(value)
+        }
+        defer { center.removeObserver(observer) }
+
+        var config = Ghostty.SurfaceConfiguration()
+        config.workingDirectory = request.workingDirectory
+        config.environmentVariables = [
+            "PHANTOM_AGENT_KIND": request.agentKind.rawValue,
+            "PHANTOM_BRANCH": request.branchName,
+            "PHANTOM_TASK_TITLE": request.displayName
+        ]
+        let command = terminalCommand(for: request)
+        config.initialInput = "exec /usr/bin/script -q \(Self.shellEscape(logURL.path)) \(command)\n"
+
+        _ = TerminalController.newTab(
+            ghostty,
+            from: TerminalController.preferredParent?.window,
+            withBaseConfig: config
+        )
+        guard let surface = createdSurface.snapshot() else {
+            throw PhantomGhosttyAgentLauncherError.surfaceCreationFailed
+        }
+        return surface
+    }
+
+    private func waitForSessionID(
+        surface: OpaquePointer,
+        registry: SessionRegistry
+    ) async throws -> UUID {
+        for _ in 0..<100 {
+            if let sessionID = await registry.sessionID(for: surface) {
+                return sessionID
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw PhantomGhosttyAgentLauncherError.sessionRegistrationTimedOut
+    }
+
+    private func terminalCommand(for request: ManagedAgentLaunchRequest) -> String {
+        let environment = ProcessInfo.processInfo.environment
+        let executable: String
+        var arguments: [String] = []
+        switch request.agentKind {
+        case .codex:
+            executable = environment["PHANTOM_CODEX_TERMINAL_COMMAND"] ?? "codex"
+            arguments.append(request.prompt)
+        case .claude:
+            executable = environment["PHANTOM_CLAUDE_TERMINAL_COMMAND"] ?? "claude"
+            let permissionMode = ClaudeBackgroundPermissionMode.resolved(environment: environment)
+            arguments += ["--permission-mode", permissionMode.rawValue, request.prompt]
+        case .unknown:
+            executable = "false"
+        }
+        return ([executable] + arguments).map(Self.shellEscape).joined(separator: " ")
+    }
+
+    private static func shellEscape(_ value: String) -> String {
+        if value.isEmpty { return "''" }
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-./:"
+        )
+        guard value.rangeOfCharacter(from: allowed.inverted) != nil else { return value }
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func acquireLaunchSlot() async {
+        guard launchInProgress else {
+            launchInProgress = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            launchWaiters.append(continuation)
+        }
+    }
+
+    private func releaseLaunchSlot() {
+        guard !launchWaiters.isEmpty else {
+            launchInProgress = false
+            return
+        }
+        launchWaiters.removeFirst().resume()
+    }
+}
+
 extension AppDelegate {
     /// Process-wide Phantom coordinator. Initialised on
     /// `applicationDidFinishLaunching`, torn down on
@@ -100,9 +307,16 @@ extension AppDelegate {
             config: config,
             tokenStore: tokenStore
         )
-        let portfolio = AppDelegate.makePhantomAgentPortfolio(store: store, tokenStore: tokenStore)
-        AppDelegate.phantomAgentPortfolio = portfolio
         let supportDirectory = store.fileURL.deletingLastPathComponent()
+        let portfolio = AppDelegate.makePhantomAgentPortfolio(
+            store: store,
+            tokenStore: tokenStore,
+            launcher: PhantomGhosttyAgentLauncher(
+                ghostty: ghostty,
+                logDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
+            )
+        )
+        AppDelegate.phantomAgentPortfolio = portfolio
         let servicePaths = PhantomAgentServicePaths(supportDirectory: supportDirectory)
         do {
             AppDelegate.phantomAgentRuntimeLease = try ProjectAgentRuntimeLease.acquire(
@@ -273,7 +487,8 @@ extension AppDelegate {
     @MainActor
     fileprivate static func makePhantomAgentPortfolio(
         store: PhantomConfigStore,
-        tokenStore: DeviceTokenStore
+        tokenStore: DeviceTokenStore,
+        launcher: any ManagedAgentLaunching
     ) -> ProjectAgentPortfolio<ProcessCommandExecutor> {
         let supportDirectory = store.fileURL.deletingLastPathComponent()
         return ProjectAgentPortfolio.local(
@@ -287,7 +502,9 @@ extension AppDelegate {
             ),
             broadcaster: PhantomGatewayBoardBroadcaster(pushNotifier: AppDelegate.phantomBoardPushNotifier),
             pushRegistrar: PhantomHostPushDeviceTokenRegistrar(tokenStore: tokenStore),
-            agentLogDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
+            agentLogDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true),
+            launcher: launcher,
+            orchestratorAgentConfig: ProjectOrchestratorAgentConfig()
         )
     }
 
