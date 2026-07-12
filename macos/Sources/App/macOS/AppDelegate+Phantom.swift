@@ -196,7 +196,7 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
         registry: SessionRegistry
     ) async throws -> UUID {
         for _ in 0..<100 {
-            if let sessionID = await registry.sessionID(for: surface) {
+            if let sessionID = await registry.sessionID(for: GhosttySurfaceHandle(surface)) {
                 return sessionID
             }
             try await Task.sleep(for: .milliseconds(20))
@@ -262,6 +262,7 @@ extension AppDelegate {
     static var phantomAgentRuntimeLease: ProjectAgentRuntimeLease?
     static var phantomAgentRunsEmbedded = false
     static var phantomBoardBridgeTask: Task<Void, Never>?
+    static var phantomAgentHostIPCServer: PhantomAgentHostIPCServer?
     static var phantomDeviceTokenStore: DeviceTokenStore?
     static var phantomBoardPushNotifier: BoardEventPushNotifier?
 
@@ -308,13 +309,14 @@ extension AppDelegate {
             tokenStore: tokenStore
         )
         let supportDirectory = store.fileURL.deletingLastPathComponent()
+        let agentLauncher = PhantomGhosttyAgentLauncher(
+            ghostty: ghostty,
+            logDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
+        )
         let portfolio = AppDelegate.makePhantomAgentPortfolio(
             store: store,
             tokenStore: tokenStore,
-            launcher: PhantomGhosttyAgentLauncher(
-                ghostty: ghostty,
-                logDirectory: supportDirectory.appendingPathComponent("agent-logs", isDirectory: true)
-            )
+            launcher: agentLauncher
         )
         AppDelegate.phantomAgentPortfolio = portfolio
         let servicePaths = PhantomAgentServicePaths(supportDirectory: supportDirectory)
@@ -342,7 +344,7 @@ extension AppDelegate {
         // changes since the last poll (cheap noop), or when the phantom_*
         // C symbols are not linked into the process (SPM unit tests).
         let snapshotProvider: PhantomCoordinator.SnapshotProvider = { sessionID, surface in
-            return SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
+            return SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
         }
 
         // Build the gateway adapter only if we already have a pairing.
@@ -359,7 +361,7 @@ extension AppDelegate {
         // OpaquePointer for surface handles to avoid importing GhosttyKit.
         // Cast via UnsafeMutableRawPointer before calling ghostty_surface_size.
         let surfaceSizeProvider: PhantomCoordinator.SurfaceSizeProvider = { surface in
-            let s = ghostty_surface_size(UnsafeMutableRawPointer(surface))
+            let s = ghostty_surface_size(UnsafeMutableRawPointer(surface.pointer))
             guard s.width_px > 0 && s.height_px > 0 else { return nil }
             return (s.width_px, s.height_px)
         }
@@ -373,10 +375,16 @@ extension AppDelegate {
             }
         )
         AppDelegate.phantomCoordinator = coordinator
+        let hostIPCServer = PhantomAgentHostIPCServer(
+            socketURL: servicePaths.hostIPCSocketURL,
+            launcher: agentLauncher
+        )
+        AppDelegate.phantomAgentHostIPCServer = hostIPCServer
 
         Task { @MainActor in
             do {
                 try await coordinator.start()
+                try hostIPCServer.start()
                 if AppDelegate.phantomAgentRunsEmbedded {
                     _ = try await portfolio.start()
                     AppDelegate.logger.info("Phantom agent runtime started in embedded mode")
@@ -416,6 +424,12 @@ extension AppDelegate {
         // Inject "Pair iPhone…" into the File menu. We do this in code so we
         // don't have to maintain a divergent MainMenu.xib against upstream.
         installPhantomPairMenuItem()
+
+        if ProcessInfo.processInfo.environment["PHANTOM_DEVICE_E2E_PAIRING_OUTPUT"] != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.phantomPairIPhone(nil)
+            }
+        }
     }
 
     @MainActor
@@ -440,11 +454,6 @@ extension AppDelegate {
                         AppDelegate.logger.error("Phantom embedded runtime failover failed: \(error)")
                     }
                 }
-                do {
-                    _ = try await portfolio.ensureOrchestratorAgentSessions()
-                } catch {
-                    AppDelegate.logger.error("Phantom orchestrator session keeper failed: \(error)")
-                }
                 if phantomGatewayTransport != nil {
                     _ = try? await portfolio.publishSnapshots()
                 }
@@ -457,6 +466,9 @@ extension AppDelegate {
     fileprivate static func installBundledPhantomAgentDaemonIfNeeded(
         supportDirectory: URL
     ) {
+        guard ProcessInfo.processInfo.environment["PHANTOM_DISABLE_LAUNCH_AGENT"] != "1" else {
+            return
+        }
         let helperURL = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers/phantom-agentd", isDirectory: false)
         guard FileManager.default.isExecutableFile(atPath: helperURL.path) else { return }
@@ -648,11 +660,11 @@ extension AppDelegate {
             let coordinator = PhantomCoordinator(
                 registry: existingRegistry ?? SessionRegistry(),
                 snapshotProvider: { sessionID, surface in
-                    SnapshotExporter.captureLatest(surface: surface, sessionID: sessionID)
+                    SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
                 },
                 gatewayAdapter: newAdapter,
                 surfaceSizeProvider: { surface in
-                    let s = ghostty_surface_size(UnsafeMutableRawPointer(surface))
+                    let s = ghostty_surface_size(UnsafeMutableRawPointer(surface.pointer))
                     guard s.width_px > 0 && s.height_px > 0 else { return nil }
                     return (s.width_px, s.height_px)
                 },
@@ -684,6 +696,8 @@ extension AppDelegate {
         // the iOS peer sees a graceful disconnect.
         AppDelegate.phantomGatewayTransport?.disconnect()
         AppDelegate.phantomGatewayTransport = nil
+        AppDelegate.phantomAgentHostIPCServer?.stop()
+        AppDelegate.phantomAgentHostIPCServer = nil
         AppDelegate.phantomBoardBridgeTask?.cancel()
         AppDelegate.phantomBoardBridgeTask = nil
         let portfolio = AppDelegate.phantomAgentPortfolio
@@ -790,6 +804,13 @@ extension AppDelegate {
             code: code,
             relayURL: relayURL
         )
+        if let outputPath = ProcessInfo.processInfo.environment["PHANTOM_DEVICE_E2E_PAIRING_OUTPUT"] {
+            try? viewModel.qrPayloadString.write(
+                to: URL(fileURLWithPath: outputPath),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
 
         let hosting = NSHostingController(rootView: PairingWindowView(viewModel: viewModel))
 
@@ -831,6 +852,10 @@ extension AppDelegate {
     /// stores a `wss://` URL because the live gateway speaks WebSocket,
     /// but the pairing REST handshake speaks `https://`. Translate.
     fileprivate static func phantomDefaultRelayHTTPURL() -> URL {
+        if let raw = ProcessInfo.processInfo.environment["PHANTOM_DEVICE_E2E_RELAY_URL"],
+           let url = httpURLFromConfigString(raw) {
+            return url
+        }
         let store = PhantomConfigStore()
         let config = store.load()
         if let url = httpURLFromConfigString(config.relayURL) {
