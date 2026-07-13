@@ -16,6 +16,7 @@ const main = @import("main_ghostty.zig");
 const state = &@import("global.zig").state;
 const apprt = @import("apprt.zig");
 const internal_os = @import("os/main.zig");
+const phantom = @import("lib_phantom.zig");
 
 // Some comptime assertions that our C API depends on.
 comptime {
@@ -44,8 +45,51 @@ comptime {
     // config in the future but for now we always just export it.
     _ = @import("benchmark/main.zig").CApi;
 
-    // Phantom-specific C API (snapshot export, event callbacks, etc.).
-    _ = @import("lib_phantom.zig");
+    // Phantom-specific C API (snapshot export, event callbacks, input, etc.).
+    _ = phantom;
+}
+
+pub export fn phantom_surface_key(
+    surface: ?*anyopaque,
+    action_raw: u8,
+    mods_raw: u32,
+    usb_keycode: u32,
+    text: ?[*:0]const u8,
+) callconv(.c) bool {
+    return phantom.phantom_surface_key(surface, action_raw, mods_raw, usb_keycode, text);
+}
+
+pub export fn phantom_surface_mouse_pos(
+    surface: ?*anyopaque,
+    cell_x: f64,
+    cell_y: f64,
+    mods_raw: u32,
+) callconv(.c) void {
+    phantom.phantom_surface_mouse_pos(surface, cell_x, cell_y, mods_raw);
+}
+
+pub export fn phantom_surface_mouse_button(
+    surface: ?*anyopaque,
+    action_raw: u8,
+    button_raw: u8,
+    mods_raw: u32,
+) callconv(.c) bool {
+    return phantom.phantom_surface_mouse_button(surface, action_raw, button_raw, mods_raw);
+}
+
+pub export fn phantom_surface_mouse_scroll(
+    surface: ?*anyopaque,
+    delta_x: f64,
+    delta_y: f64,
+) callconv(.c) void {
+    phantom.phantom_surface_mouse_scroll(surface, delta_x, delta_y);
+}
+
+pub export fn phantom_surface_set_focus(
+    surface: ?*anyopaque,
+    focused: bool,
+) callconv(.c) void {
+    phantom.phantom_surface_set_focus(surface, focused);
 }
 
 /// ghostty_info_s

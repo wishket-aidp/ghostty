@@ -34,6 +34,7 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 
 const apprt = @import("apprt.zig");
+const input = @import("input.zig");
 const terminal = @import("terminal/main.zig");
 const termio = @import("termio.zig");
 
@@ -443,6 +444,105 @@ pub export fn phantom_surface_send_text(
     core.io.queueMessage(msg, .unlocked);
 }
 
+// Sends a remote key event using USB HID page 0x07 keycodes. Ghostty's C API
+// expects platform-native keycodes, so translate before entering its normal
+// key binding and terminal encoding path.
+// MUST be called on the app's main thread.
+pub fn phantom_surface_key(
+    surface: ?*anyopaque,
+    action_raw: u8,
+    mods_raw: u32,
+    usb_keycode: u32,
+    text: ?[*:0]const u8,
+) callconv(.c) bool {
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(surface orelse return false));
+    const action = std.meta.intToEnum(input.Action, action_raw) catch return false;
+    const mods: input.Mods = @bitCast(@as(
+        input.Mods.Backing,
+        @truncate(mods_raw),
+    ));
+    const native_keycode = for (input.keycodes.entries) |entry| {
+        if (entry.usb == usb_keycode) break entry.native;
+    } else 0;
+    const event: apprt.embedded.App.KeyEvent = .{
+        .action = action,
+        .mods = mods,
+        .consumed_mods = .{},
+        .keycode = native_keycode,
+        .text = if (text) |ptr| std.mem.span(ptr) else null,
+        .unshifted_codepoint = 0,
+        .composing = false,
+    };
+    return surf.app.keyEvent(.{ .surface = surf }, event) catch false;
+}
+
+// Remote mouse coordinates use terminal cells. Convert to cell centers in
+// pixels before invoking Ghostty's normal pointer path.
+// MUST be called on the app's main thread.
+pub fn phantom_surface_mouse_pos(
+    surface: ?*anyopaque,
+    cell_x: f64,
+    cell_y: f64,
+    mods_raw: u32,
+) callconv(.c) void {
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(surface orelse return));
+    const cell = surf.core_surface.size.cell;
+    if (cell.width == 0 or cell.height == 0) return;
+    const mods: input.Mods = @bitCast(@as(
+        input.Mods.Backing,
+        @truncate(mods_raw),
+    ));
+    surf.cursorPosCallback(
+        (@max(cell_x, 0) + 0.5) * @as(f64, @floatFromInt(cell.width)),
+        (@max(cell_y, 0) + 0.5) * @as(f64, @floatFromInt(cell.height)),
+        mods,
+    );
+}
+
+// MUST be called on the app's main thread.
+pub fn phantom_surface_mouse_button(
+    surface: ?*anyopaque,
+    action_raw: u8,
+    button_raw: u8,
+    mods_raw: u32,
+) callconv(.c) bool {
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(surface orelse return false));
+    const action = std.meta.intToEnum(input.MouseButtonState, action_raw) catch return false;
+    const button = std.meta.intToEnum(input.MouseButton, button_raw) catch return false;
+    const mods: input.Mods = @bitCast(@as(
+        input.Mods.Backing,
+        @truncate(mods_raw),
+    ));
+    return surf.mouseButtonCallback(action, button, mods);
+}
+
+// Remote scroll deltas use logical cells. Convert to pixels and mark them as
+// non-precision wheel events so Ghostty applies normal terminal scrolling.
+// MUST be called on the app's main thread.
+pub fn phantom_surface_mouse_scroll(
+    surface: ?*anyopaque,
+    delta_x: f64,
+    delta_y: f64,
+) callconv(.c) void {
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(surface orelse return));
+    const cell = surf.core_surface.size.cell;
+    if (cell.width == 0 or cell.height == 0) return;
+    surf.scrollCallback(
+        delta_x * @as(f64, @floatFromInt(cell.width)),
+        delta_y * @as(f64, @floatFromInt(cell.height)),
+        .{},
+    );
+}
+
+// MUST be called on the app's main thread.
+pub fn phantom_surface_set_focus(
+    surface: ?*anyopaque,
+    focused: bool,
+) callconv(.c) void {
+    const surf: *EmbeddedSurface = @ptrCast(@alignCast(surface orelse return));
+    surf.focusCallback(focused);
+}
+
 // Resizes the surface to an exact CELL grid (cols x rows).
 //
 // Converts the requested grid dimensions to pixels using the surface's
@@ -474,6 +574,11 @@ comptime {
     _ = PHANTOM_EVENT_RESIZE;
     _ = PHANTOM_EVENT_TITLE_CHANGED;
     _ = PHANTOM_EVENT_PROCESS_EXIT;
+    _ = phantom_surface_key;
+    _ = phantom_surface_mouse_pos;
+    _ = phantom_surface_mouse_button;
+    _ = phantom_surface_mouse_scroll;
+    _ = phantom_surface_set_focus;
     _ = builtin.is_test;
     _ = assert;
     _ = Allocator;

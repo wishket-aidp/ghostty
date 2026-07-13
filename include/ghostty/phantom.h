@@ -99,6 +99,36 @@ phantom_snapshot_t* phantom_surface_snapshot(ghostty_surface_t surface);
 // MUST be called on the app's main thread.
 void phantom_surface_send_text(ghostty_surface_t surface, const char* ptr, size_t len);
 
+// Remote-input wrappers use primitive ABI fields so PhantomBridge can resolve
+// them dynamically without reproducing Ghostty's C structs in Swift.
+// keycode uses USB HID usage page 0x07; mouse coordinates use terminal cells.
+// All functions must be called on the app's main thread.
+bool phantom_surface_key(
+    ghostty_surface_t surface,
+    uint8_t action,
+    uint32_t mods,
+    uint32_t keycode,
+    const char* text
+);
+void phantom_surface_mouse_pos(
+    ghostty_surface_t surface,
+    double cell_x,
+    double cell_y,
+    uint32_t mods
+);
+bool phantom_surface_mouse_button(
+    ghostty_surface_t surface,
+    uint8_t action,
+    uint8_t button,
+    uint32_t mods
+);
+void phantom_surface_mouse_scroll(
+    ghostty_surface_t surface,
+    double delta_x,
+    double delta_y
+);
+void phantom_surface_set_focus(ghostty_surface_t surface, bool focused);
+
 void phantom_snapshot_header(
     phantom_snapshot_t* snapshot,
     phantom_snapshot_header_t* out_header
