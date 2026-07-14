@@ -633,6 +633,11 @@ extension AppDelegate {
                 }
             },
             boardMessageRouter: { message in
+                // This host owns the authoritative board snapshot. Relayed
+                // snapshots are peer-facing state updates, not host commands;
+                // applying one here would re-broadcast it and create a loop.
+                if case .boardSnapshot = message { return }
+
                 guard let portfolio = AppDelegate.phantomAgentPortfolio else { return }
                 if case .manifestOperationRequest(let request) = message {
                     let result = await portfolio.executeManifestOperation(request)
