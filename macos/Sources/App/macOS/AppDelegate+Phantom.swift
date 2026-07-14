@@ -187,9 +187,16 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
             "PHANTOM_TASK_TITLE": request.displayName
         ]
         let command = terminalCommand(for: request)
-        // Ghostty retains an idle surface after the command exits. Persist the
-        // exit status beside the transcript so lifecycle checks see completion.
-        config.initialInput = "(/usr/bin/script -q \(Self.shellEscape(logURL.path)) \(command); status=$?; printf '%s' \"$status\" > \(Self.shellEscape(completionURL.path)))\n"
+        // Ghostty retains an idle surface after the command exits. Write the
+        // exit status inside script's child shell so it is available even when
+        // the terminal surface itself remains open.
+        let wrappedCommand = """
+        \(command)
+        status=$?
+        printf '%s' \"$status\" > \(Self.shellEscape(completionURL.path))
+        exit \"$status\"
+        """
+        config.initialInput = "exec /usr/bin/script -q \(Self.shellEscape(logURL.path)) /bin/zsh -lc \(Self.shellEscape(wrappedCommand))\n"
 
         _ = TerminalController.newTab(
             ghostty,
