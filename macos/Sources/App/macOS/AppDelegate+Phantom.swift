@@ -370,9 +370,12 @@ extension AppDelegate {
         // `TerminalSnapshot`. Returns `nil` when the surface has no
         // changes since the last poll (cheap noop), or when the phantom_*
         // C symbols are not linked into the process (SPM unit tests).
-        let snapshotProvider: PhantomCoordinator.SnapshotProvider = { sessionID, surface in
-            return SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
-        }
+        let snapshotProvider: PhantomCoordinator.SnapshotProvider? =
+            ProcessInfo.processInfo.environment["PHANTOM_DEVICE_E2E_BOARD_ONLY"] == "1"
+            ? nil
+            : { sessionID, surface in
+                SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
+            }
 
         // Build the gateway adapter only if we already have a pairing.
         // Otherwise we defer until `phantomPairedSink` observes the first
@@ -739,11 +742,15 @@ extension AppDelegate {
             if let old = AppDelegate.phantomCoordinator {
                 await old.stop()
             }
+            let snapshotProvider: PhantomCoordinator.SnapshotProvider? =
+                ProcessInfo.processInfo.environment["PHANTOM_DEVICE_E2E_BOARD_ONLY"] == "1"
+                ? nil
+                : { sessionID, surface in
+                    SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
+                }
             let coordinator = PhantomCoordinator(
                 registry: existingRegistry ?? SessionRegistry(),
-                snapshotProvider: { sessionID, surface in
-                    SnapshotExporter.captureLatest(surface: surface.pointer, sessionID: sessionID)
-                },
+                snapshotProvider: snapshotProvider,
                 gatewayAdapter: newAdapter,
                 surfaceSizeProvider: { surface in
                     let s = ghostty_surface_size(UnsafeMutableRawPointer(surface.pointer))
