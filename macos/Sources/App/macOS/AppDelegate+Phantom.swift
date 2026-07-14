@@ -192,9 +192,9 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
         // the terminal surface itself remains open.
         let wrappedCommand = """
         \(command)
-        status=$?
-        printf '%s' \"$status\" > \(Self.shellEscape(completionURL.path))
-        exit \"$status\"
+        exitCode=$?
+        printf '%s' \"$exitCode\" > \(Self.shellEscape(completionURL.path))
+        exit \"$exitCode\"
         """
         config.initialInput = "exec /usr/bin/script -q \(Self.shellEscape(logURL.path)) /bin/zsh -lc \(Self.shellEscape(wrappedCommand))\n"
 
