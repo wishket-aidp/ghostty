@@ -451,7 +451,7 @@ extension AppDelegate {
                 self.handlePhantomPairedDeviceChange(device: device, in: pairedStore)
             }
 
-        // Inject "Pair iPhone…" into the File menu. We do this in code so we
+        // Inject "iPhone 연결…" into the File menu. We do this in code so we
         // don't have to maintain a divergent MainMenu.xib against upstream.
         installPhantomPairMenuItem()
 
@@ -844,7 +844,7 @@ extension AppDelegate {
         if fileMenu.items.contains(where: { $0.tag == phantomMenuItemTag }) { return }
 
         let item = NSMenuItem(
-            title: "Pair iPhone…",
+            title: "iPhone 연결…",
             action: #selector(phantomPairIPhone(_:)),
             keyEquivalent: "P"
         )
@@ -904,7 +904,7 @@ extension AppDelegate {
         let hosting = NSHostingController(rootView: PairingWindowView(viewModel: viewModel))
 
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Pair iPhone"
+        window.title = "iPhone 연결"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 360, height: 500))
