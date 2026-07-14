@@ -94,8 +94,10 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
 
         let launchID = UUID()
         let logURL = logDirectory.appendingPathComponent("\(launchID.uuidString).log", isDirectory: false)
+        let completionURL = logURL.appendingPathExtension("status")
         try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
-        let surface = try createSurface(for: request, logURL: logURL)
+        try? FileManager.default.removeItem(at: completionURL)
+        let surface = try createSurface(for: request, logURL: logURL, completionURL: completionURL)
         let sessionID = try await waitForSessionID(surface: surface, registry: coordinator.registry)
         await coordinator.registry.updateMetadata(
             AgentSessionMetadata(
@@ -125,6 +127,9 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
     }
 
     func runtimeStatus(for result: ManagedAgentLaunchResult) async -> ManagedAgentRuntimeStatus {
+        if let completionStatus = Self.completedExitStatus(logPath: result.logPath) {
+            return completionStatus == 0 ? .completed : .failed
+        }
         guard let sessionID = result.session?.sessionID,
               let coordinator = AppDelegate.phantomCoordinator else {
             return .missing
@@ -138,6 +143,9 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
         }
         let activeSessionIDs = Set(await coordinator.registry.allSessionIDs)
         return results.map { result in
+            if let completionStatus = Self.completedExitStatus(logPath: result.logPath) {
+                return completionStatus == 0 ? .completed : .failed
+            }
             guard let sessionID = result.session?.sessionID else { return .missing }
             return activeSessionIDs.contains(sessionID) ? .running : .completed
         }
@@ -156,7 +164,8 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
 
     private func createSurface(
         for request: ManagedAgentLaunchRequest,
-        logURL: URL
+        logURL: URL,
+        completionURL: URL
     ) throws -> OpaquePointer {
         let createdSurface = PhantomCreatedSurfaceBox()
         let center = NotificationCenter.default
@@ -178,7 +187,9 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
             "PHANTOM_TASK_TITLE": request.displayName
         ]
         let command = terminalCommand(for: request)
-        config.initialInput = "exec /usr/bin/script -q \(Self.shellEscape(logURL.path)) \(command)\n"
+        // Ghostty retains an idle surface after the command exits. Persist the
+        // exit status beside the transcript so lifecycle checks see completion.
+        config.initialInput = "(/usr/bin/script -q \(Self.shellEscape(logURL.path)) \(command); status=$?; printf '%s' \"$status\" > \(Self.shellEscape(completionURL.path)))\n"
 
         _ = TerminalController.newTab(
             ghostty,
@@ -229,6 +240,15 @@ fileprivate final class PhantomGhosttyAgentLauncher: ManagedAgentLaunching, Mana
         )
         guard value.rangeOfCharacter(from: allowed.inverted) != nil else { return value }
         return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func completedExitStatus(logPath: String?) -> Int32? {
+        guard let logPath,
+              let contents = try? String(contentsOfFile: logPath + ".status", encoding: .utf8),
+              let status = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return nil
+        }
+        return status
     }
 
     private func acquireLaunchSlot() async {
@@ -562,6 +582,11 @@ extension AppDelegate {
     }
 
     fileprivate static func phantomObservedSessionHandler(_ event: ObservedSessionEvent) async {
+        // Device E2E creates a disposable host for one explicit project. Do not
+        // import unrelated, already-running local sessions into that host.
+        guard ProcessInfo.processInfo.environment["PHANTOM_DISABLE_OBSERVED_SESSION_INGESTION"] != "1" else {
+            return
+        }
         guard let portfolio = AppDelegate.phantomAgentPortfolio else { return }
         _ = try? await portfolio.ingestObservedSession(
             sessionID: event.sessionID,
@@ -579,6 +604,7 @@ extension AppDelegate {
     @MainActor
     fileprivate static func makePhantomGatewayAdapter(from pairedStore: PairedDeviceStore) -> PhantomGatewayAdapter? {
         guard let device = pairedStore.current,
+              let sessionKey = pairedStore.sharedKey,
               let url = URL(string: device.relayURLString) else {
             return nil
         }
@@ -586,7 +612,8 @@ extension AppDelegate {
         let transport = URLSessionGatewayTransport(
             relayURL: url,
             deviceID: device.deviceID,
-            jwtToken: device.jwtToken
+            jwtToken: device.jwtToken,
+            sessionKey: sessionKey
         )
         AppDelegate.phantomGatewayTransport = transport
 
@@ -605,9 +632,52 @@ extension AppDelegate {
                     await AppDelegate.phantomCoordinator?.sendBoard(.manifestOperationResult(result))
                     return
                 }
-                _ = try? await portfolio.handle(message)
+                do {
+                    _ = try await portfolio.handle(message)
+                    PhantomDiag.logE2E("host handled \(AppDelegate.phantomBoardMessageKind(message))")
+                    AppDelegate.phantomE2EBoardLog("handled \(AppDelegate.phantomBoardMessageKind(message))")
+                } catch {
+                    AppDelegate.logger.error("Phantom board command failed: \(String(reflecting: type(of: error)))")
+                    PhantomDiag.logE2E("host failed \(AppDelegate.phantomBoardMessageKind(message)) error=\(String(reflecting: type(of: error)))")
+                    AppDelegate.phantomE2EBoardLog("failed \(AppDelegate.phantomBoardMessageKind(message)) error=\(String(reflecting: type(of: error)))")
+                }
             }
         )
+    }
+
+    fileprivate static func phantomE2EBoardLog(_ message: String) {
+        guard ProcessInfo.processInfo.environment["PHANTOM_RUN_DEVICE_E2E"] == "1" else { return }
+        let line = "[Phantom E2E] board \(message)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    fileprivate static func phantomBoardMessageKind(_ message: SyncMessage) -> String {
+        switch message {
+        case .managedTaskRequest: return "managedTaskRequest"
+        case .approvalDecision: return "approvalDecision"
+        case .actionRequest: return "actionRequest"
+        case .taskControlRequest: return "taskControlRequest"
+        case .routeDecisionRequest: return "routeDecisionRequest"
+        case .integrationPullRequestRequest: return "integrationPullRequestRequest"
+        case .voiceCommand: return "voiceCommand"
+        case .browserAutomationRequest: return "browserAutomationRequest"
+        case .servicePortRequest: return "servicePortRequest"
+        case .servicePortReleaseRequest: return "servicePortReleaseRequest"
+        case .pushDeviceToken: return "pushDeviceToken"
+        case .approvalRequest: return "approvalRequest"
+        case .routeRecommendation: return "routeRecommendation"
+        case .boardSnapshot: return "boardSnapshot"
+        case .manifestOperationResult: return "manifestOperationResult"
+        case .manifestOperationRequest: return "manifestOperationRequest"
+        case .hello: return "hello"
+        case .heartbeat: return "heartbeat"
+        case .sessionList: return "sessionList"
+        case .sessionStatus: return "sessionStatus"
+        case .snapshot: return "snapshot"
+        case .input: return "input"
+        case .resize: return "resize"
+        case .ownership: return "ownership"
+        }
     }
 
     /// Called when `PairedDeviceStore.current` changes. If we now have a
@@ -861,7 +931,7 @@ extension AppDelegate {
         if let url = httpURLFromConfigString(config.relayURL) {
             return url
         }
-        return URL(string: "https://phantom-relay.fly.dev")!
+        return URL(string: "https://phantom-cloudflare-relay.wishket-yipark.workers.dev")!
     }
 
     private static func httpURLFromConfigString(_ raw: String) -> URL? {

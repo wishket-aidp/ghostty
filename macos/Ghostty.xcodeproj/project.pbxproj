@@ -87,7 +87,7 @@
 		A586167B2B7703CC009BDB1D /* fish */ = {isa = PBXFileReference; lastKnownFileType = folder; name = fish; path = "../zig-out/share/fish"; sourceTree = "<group>"; };
 		A5985CE52C33060F00C57AD3 /* man */ = {isa = PBXFileReference; lastKnownFileType = folder; name = man; path = "../zig-out/share/man"; sourceTree = "<group>"; };
 		A5A1F8842A489D6800D1E8BC /* terminfo */ = {isa = PBXFileReference; lastKnownFileType = folder; name = terminfo; path = "../zig-out/share/terminfo"; sourceTree = "<group>"; };
-		A5B30531299BEAAA0047F10C /* Ghostty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ghostty.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A5B30531299BEAAA0047F10C /* Phantom.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Phantom.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A5B30538299BEAAB0047F10C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ghostty.entitlements; sourceTree = "<group>"; };
 		A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ghostty-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -345,7 +345,7 @@
 		A5B30532299BEAAA0047F10C /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A5B30531299BEAAA0047F10C /* Ghostty.app */,
+				A5B30531299BEAAA0047F10C /* Phantom.app */,
 				A5D4499D2B53AE7B000F5B83 /* Ghostty-iOS.app */,
 				A54F45F32E1F047A0046BD5C /* GhosttyTests.xctest */,
 				810ACC9F2E9D3301004F8F92 /* GhosttyUITests.xctest */,
@@ -457,7 +457,7 @@
 				F0E0F0E0F0E0F0E0F0E00020 /* PhantomAgent */,
 			);
 			productName = Ghostty;
-			productReference = A5B30531299BEAAA0047F10C /* Ghostty.app */;
+			productReference = A5B30531299BEAAA0047F10C /* Phantom.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A5D4499C2B53AE7B000F5B83 /* Ghostty-iOS */ = {
@@ -773,6 +773,7 @@
 				MARKETING_VERSION = 0.2.0;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_phantom_surface_send_text -Wl,-u,_phantom_surface_key -Wl,-u,_phantom_surface_mouse_pos -Wl,-u,_phantom_surface_mouse_button -Wl,-u,_phantom_surface_mouse_scroll -Wl,-u,_phantom_surface_set_focus -Wl,-u,_phantom_surface_set_grid_size -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac;
+				PRODUCT_MODULE_NAME = Ghostty;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
@@ -956,7 +957,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Phantom.app/Contents/MacOS/Phantom";
 			};
 			name = Debug;
 		};
@@ -979,7 +980,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Phantom.app/Contents/MacOS/Phantom";
 			};
 			name = Release;
 		};
@@ -1002,7 +1003,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ghostty.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ghostty";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Phantom.app/Contents/MacOS/Phantom";
 			};
 			name = ReleaseLocal;
 		};
@@ -1171,6 +1172,7 @@
 				MARKETING_VERSION = 0.2.0;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_phantom_surface_send_text -Wl,-u,_phantom_surface_key -Wl,-u,_phantom_surface_mouse_pos -Wl,-u,_phantom_surface_mouse_button -Wl,-u,_phantom_surface_mouse_scroll -Wl,-u,_phantom_surface_set_focus -Wl,-u,_phantom_surface_set_grid_size -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac.debug;
+				PRODUCT_MODULE_NAME = Ghostty;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";
@@ -1227,6 +1229,7 @@
 				MARKETING_VERSION = 0.2.0;
 				"OTHER_LDFLAGS[arch=*]" = "-lstdc++ -Wl,-u,_phantom_surface_snapshot -Wl,-u,_phantom_surface_snapshot_if_changed -Wl,-u,_phantom_surface_snapshot_seq -Wl,-u,_phantom_snapshot_header -Wl,-u,_phantom_snapshot_cell -Wl,-u,_phantom_snapshot_free -Wl,-u,_phantom_surface_send_text -Wl,-u,_phantom_surface_key -Wl,-u,_phantom_surface_mouse_pos -Wl,-u,_phantom_surface_mouse_button -Wl,-u,_phantom_surface_mouse_scroll -Wl,-u,_phantom_surface_set_focus -Wl,-u,_phantom_surface_set_grid_size -Wl,-u,_ghostty_surface_text -Wl,-u,_ghostty_surface_key";
 				PRODUCT_BUNDLE_IDENTIFIER = com.phantom.mac;
+				PRODUCT_MODULE_NAME = Ghostty;
 				PRODUCT_NAME = Phantom;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/macOS/ghostty-bridging-header.h";

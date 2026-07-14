@@ -3,28 +3,19 @@
 This document describes how the Ghostty-fork-based Phantom macOS app
 wires into the Phantom Swift packages that live in the parent monorepo.
 
-## Status (2026-05-30, Phase 6)
+## Status (2026-07-13)
 
-- **Source-level wiring is in place**: `AppDelegate+Phantom.swift` instantiates
+- **Host wiring is active**: `AppDelegate+Phantom.swift` instantiates
   `PhantomBridge.PhantomCoordinator` on `applicationDidFinishLaunching` and
   tears it down on `applicationWillTerminate`. All references are gated
   behind `#if canImport(PhantomBridge) && canImport(PhantomMacUI)`, so the
   project builds cleanly as upstream Ghostty would.
 
-- **Xcode project linkage is deferred**: the parent monorepo's
-  `Package.swift` is two directories up (`../../Package.swift`). Adding it
-  as an `XCLocalSwiftPackageReference` requires editing
-  `Ghostty.xcodeproj/project.pbxproj` by hand. Modifying the submodule's
-  project file makes upstream merges noisier, so this is left as a
-  manual one-time step:
-
-  1. Open `vendor/ghostty/macos/Ghostty.xcodeproj` in Xcode.
-  2. File → Add Package Dependencies → Add Local… and select `../..`
-     (the parent Phantom repo).
-  3. On the `Ghostty` target's *General → Frameworks, Libraries, and
-     Embedded Content* list, add both `PhantomBridge` and `PhantomMacUI`.
-  4. Build. The `canImport(PhantomBridge)` shim in
-     `AppDelegate+Phantom.swift` activates automatically.
+- **Xcode project linkage is committed**: `Ghostty.xcodeproj` declares the
+  parent `Package.swift` as an `XCLocalSwiftPackageReference` and the
+  `Ghostty` target links `PhantomBridge`, `PhantomMacUI`, and `PhantomAgent`.
+  The `canImport` gate remains only so upstream-only builds can compile
+  without the parent checkout.
 
 - **Binary dependency**: `PhantomBridge` consumes
   `build/GhosttyKit.xcframework`, which is produced by
@@ -47,10 +38,11 @@ PhantomCoordinator(
 )
 ```
 
-Today the bootstrap uses the defaults — no push bus, no gateway adapter —
-so the coordinator is effectively a passive surface observer. Wiring
-`PushEventBus` and `PhantomGatewayAdapter` is the next integration step
-once `PhantomConfig` exposes the relay URL and APNs credentials.
+At launch the app restores the paired-device Keychain record, builds an
+encrypted `URLSessionGatewayTransport`, and attaches the gateway adapter to
+the coordinator. Pairing and APNs configuration remain capability-gated: a
+missing pairing key prevents a plaintext fallback, and APNs delivery only
+activates after its credentials are configured.
 
 ## Branding
 
