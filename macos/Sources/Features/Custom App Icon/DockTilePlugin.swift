@@ -1,7 +1,6 @@
 import AppKit
 
-@MainActor
-class DockTilePlugin: NSObject, @MainActor NSDockTilePlugIn {
+class DockTilePlugin: NSObject, NSDockTilePlugIn {
     // WARNING: An instance of this class is alive as long as Ghostty's icon is
     // in the doc (running or not!), so keep any state and processing to a
     // minimum to respect resource usage.
@@ -129,9 +128,17 @@ class DockTilePlugin: NSObject, @MainActor NSDockTilePlugIn {
     }
 }
 
-@MainActor
 private extension NSDockTile {
     func setIcon(_ newIcon: NSImage) {
+        performSelector(
+            onMainThread: #selector(setIconOnMainThread(_:)),
+            with: newIcon,
+            waitUntilDone: false
+        )
+    }
+
+    @MainActor
+    @objc func setIconOnMainThread(_ newIcon: NSImage) {
         let iconView = NSImageView(frame: CGRect(origin: .zero, size: self.size))
         iconView.wantsLayer = true
         iconView.image = newIcon
