@@ -1,6 +1,7 @@
 import AppKit
 
-class DockTilePlugin: NSObject, NSDockTilePlugIn {
+@MainActor
+class DockTilePlugin: NSObject, @MainActor NSDockTilePlugIn {
     // WARNING: An instance of this class is alive as long as Ghostty's icon is
     // in the doc (running or not!), so keep any state and processing to a
     // minimum to respect resource usage.
@@ -60,7 +61,10 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
             .default()
             .publisher(for: .ghosttyIconDidChange)
             .map { [weak self] _ in self?.ghosttyUserDefaults?.appIcon }
-            .receive(on: DispatchQueue.global())
+            // Every operation below touches AppKit state. Keeping the pipeline
+            // on the main queue also avoids transferring NSImage across an
+            // isolation boundary under Swift 6 strict concurrency.
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] newIcon in self?.iconDidChange(newIcon, dockTile: dockTile) }
     }
 
@@ -125,19 +129,13 @@ class DockTilePlugin: NSObject, NSDockTilePlugIn {
     }
 }
 
+@MainActor
 private extension NSDockTile {
     func setIcon(_ newIcon: NSImage) {
-        // Update the Dock tile on the main thread.
-        DispatchQueue.main.async {
-            let iconView = NSImageView(frame: CGRect(origin: .zero, size: self.size))
-            iconView.wantsLayer = true
-            iconView.image = newIcon
-            self.contentView = iconView
-            self.display()
-        }
+        let iconView = NSImageView(frame: CGRect(origin: .zero, size: self.size))
+        iconView.wantsLayer = true
+        iconView.image = newIcon
+        self.contentView = iconView
+        self.display()
     }
 }
-
-// This is required because of the DispatchQueue call above. This doesn't
-// feel right but I don't know a better way to solve this.
-extension NSDockTile: @unchecked @retroactive Sendable {}
